@@ -1,0 +1,21 @@
+Admin terminal VM:
+
+bcdedit /set TESTSIGNING on
+bcdedit /debug on
+bcdedit /dbgsettings serial debugport:1 baudrate:115200
+
+Admin terminal host:
+
+Get-VMComPort -VMName Win11-dev
+Set-VMComPort -VMName Win11-dev -Path \\.\pipe\SFE-Debug -Number 1
+
+# WinDbg Connection String (run on host):
+# windbg.exe -k com:pipe,port=\\.\pipe\SFE-Debug,baud=115200
+
+certutil.exe -addstore "Root" "SF-Enforcer.cer"
+certutil.exe -f -addstore "TrustedPublisher" "SF-Enforcer.cer"
+
+sc.exe create SFEnforcer type= kernel binPath= C:\Users\User\Documents\SF-Checker\2\SF-Enforcer.sys
+sc.exe start SFEnforcer
+sc.exe delete SFEnforcer
+

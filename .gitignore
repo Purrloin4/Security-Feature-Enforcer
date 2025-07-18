@@ -1,0 +1,44 @@
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.sln.docstates
+
+# Build results
+[Bb]in/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+build/
+[Oo]bj/
+
+# Other
+*.tlog
+*.pdb
+*.ilk
+*.aps
+*.ncb
+*.pch
+*.idb
+*.ipch
+*.log
+*.tmp
+*.sbr
+*.bsc
+*.res
+*.sdf
+*.opensdf
+ipch/
+package/
+packages/
+*.[Pp]ublish.xml
+*.pubxml
+*.pubxml.user
+*.zip
+
+# Driver specific
+*.sys
+*.inf
+*.cat
+*.cer
