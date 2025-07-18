@@ -38,27 +38,20 @@ DriverEntry(
     // Initialize WPP Tracing
     //
     WPP_INIT_TRACING(DriverObject, RegistryPath);
-
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC! Entry");
 
     //
-    // Register a cleanup callback so that we can call WPP_CLEANUP when
-    // the framework driver object is deleted during driver unload.
+    // Register a cleanup callback
     //
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "Initializing WDF_OBJECT_ATTRIBUTES");
     WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
     attributes.EvtCleanupCallback = SFEnforcerEvtDriverContextCleanup;
 
-    WDF_DRIVER_CONFIG_INIT(&config,
-                           WDF_NO_EVENT_CALLBACK // This is no longer a PnP driver
-                           );
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "Initializing WDF_DRIVER_CONFIG");
+    WDF_DRIVER_CONFIG_INIT(&config, WDF_NO_EVENT_CALLBACK);
 
-    status = WdfDriverCreate(DriverObject,
-                             RegistryPath,
-                             &attributes,
-                             &config,
-                             WDF_NO_HANDLE
-                             );
-
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "Calling WdfDriverCreate");
+    status = WdfDriverCreate(DriverObject, RegistryPath, &attributes, &config, WDF_NO_HANDLE);
     if (!NT_SUCCESS(status)) {
         TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER, "WdfDriverCreate failed %!STATUS!", status);
         WPP_CLEANUP(DriverObject);
@@ -66,14 +59,10 @@ DriverEntry(
     }
 
     //
-    // Create a control device object. This is the correct model for a software-only
-    // driver that provides an IOCTL interface.
+    // Create a control device object
     //
-    deviceInit = WdfControlDeviceInitAllocate(
-        WdfGetDriver(),
-        &SDDL_DEVOBJ_SYS_ALL_ADM_ALL // Allow system and admin access
-    );
-
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "Calling WdfControlDeviceInitAllocate");
+    deviceInit = WdfControlDeviceInitAllocate(WdfGetDriver(), &SDDL_DEVOBJ_SYS_ALL_ADM_ALL);
     if (!deviceInit) {
         status = STATUS_INSUFFICIENT_RESOURCES;
         TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER, "WdfControlDeviceInitAllocate failed %!STATUS!", status);
@@ -81,13 +70,10 @@ DriverEntry(
         return status;
     }
 
-    //
-    // Set exclusive to FALSE so that multiple applications can talk to the driver
-    // at the same time.
-    //
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "Setting device as non-exclusive");
     WdfDeviceInitSetExclusive(deviceInit, FALSE);
 
-    // We are not using a context for the device object, so we can use WDF_NO_OBJECT_ATTRIBUTES.
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "Calling WdfDeviceCreate");
     status = WdfDeviceCreate(&deviceInit, WDF_NO_OBJECT_ATTRIBUTES, &device);
     if (!NT_SUCCESS(status)) {
         TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER, "WdfDeviceCreate failed %!STATUS!", status);
@@ -96,13 +82,10 @@ DriverEntry(
     }
 
     //
-    // Create a device interface so that applications can find and talk to us.
+    // Create a device interface
     //
-    status = WdfDeviceCreateDeviceInterface(
-        device,
-        &GUID_DEVINTERFACE_SFEnforcer,
-        NULL // ReferenceString
-    );
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "Calling WdfDeviceCreateDeviceInterface");
+    status = WdfDeviceCreateDeviceInterface(device, &GUID_DEVINTERFACE_SFEnforcer, NULL);
     if (!NT_SUCCESS(status)) {
         TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER, "WdfDeviceCreateDeviceInterface failed %!STATUS!", status);
         WPP_CLEANUP(DriverObject);
@@ -112,6 +95,7 @@ DriverEntry(
     //
     // Initialize the I/O Package and any Queues
     //
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "Calling SFEnforcerQueueInitialize");
     status = SFEnforcerQueueInitialize(device);
     if (!NT_SUCCESS(status)) {
         TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER, "SFEnforcerQueueInitialize failed %!STATUS!", status);
@@ -120,13 +104,12 @@ DriverEntry(
     }
 
     //
-    // Tell the framework that this device is finished initializing.
-    // This is required for control devices.
+    // Finish initializing the control device
     //
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "Calling WdfControlFinishInitializing");
     WdfControlFinishInitializing(device);
 
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC! Exit");
-
     return status;
 }
 
