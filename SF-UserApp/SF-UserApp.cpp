@@ -10,79 +10,28 @@
 
 int main()
 {
-    HDEVINFO hDevInfo;
-    SP_DEVICE_INTERFACE_DATA devInterfaceData;
-    PSP_DEVICE_INTERFACE_DETAIL_DATA_W pDetailData = NULL;
     HANDLE hDevice = INVALID_HANDLE_VALUE;
-    DWORD requiredSize = 0;
     BOOL bResult;
 
-    // Get the device information set for our interface GUID
-	hDevInfo = SetupDiGetClassDevs(&GUID_DEVINTERFACE_SFEnforcer, NULL, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE); // Find devices that match our interface GUID
-    if (hDevInfo == INVALID_HANDLE_VALUE) {
-        printf("Error: SetupDiGetClassDevs failed: %d\n", GetLastError());
-        return 1;
-    }
+    // Directly open the device using its symbolic link name.
+    // The name \\.\ is the user-mode prefix for \\DosDevices
+    hDevice = CreateFileW(
+    L"\\\\.\\SFEnforcer",
+        GENERIC_READ | GENERIC_WRITE,
+        0,
+        NULL,
+        OPEN_EXISTING,
+        0,
+        NULL
+        );
 
-    devInterfaceData.cbSize = sizeof(SP_DEVICE_INTERFACE_DATA);
-
-    // Enumerate the device interfaces. We will retry a few times in case the driver
-    // is still initializing when the application starts.
-    int retries = 5;
-    for (int i = 0; i < retries; i++) {
-        bResult = SetupDiEnumDeviceInterfaces(hDevInfo, 0, &GUID_DEVINTERFACE_SFEnforcer, 0, &devInterfaceData);
-        if (bResult) {
-            break; // Success, device interface found.
+        if (hDevice == INVALID_HANDLE_VALUE) {
+            printf("Error: CreateFileW failed with error code: %d\n", GetLastError());
+            printf("Is the driver running?\n");
+            return 1;
         }
 
-        if (GetLastError() != ERROR_NO_MORE_ITEMS) {
-            // An unexpected error occurred, so we should stop.
-            break;
-        }
-
-        // Device not found yet, wait a moment and try again.
-        printf("Device interface not found yet, retrying (%d/%d)...\n", i + 1, retries);
-        Sleep(500); // Wait for half a second
-    }
-
-    if (!bResult) {
-        printf("Error: SetupDiEnumDeviceInterfaces failed after retries: %d\n", GetLastError());
-        SetupDiDestroyDeviceInfoList(hDevInfo);
-        return 1;
-    }
-
-    // Get the required size for the detail data
-    SetupDiGetDeviceInterfaceDetailW(hDevInfo, &devInterfaceData, NULL, 0, &requiredSize, NULL);
-
-    // Allocate memory for the detail data
-    pDetailData = (PSP_DEVICE_INTERFACE_DETAIL_DATA_W)malloc(requiredSize);
-    if (pDetailData == NULL) {
-        printf("Error: Failed to allocate memory for device detail data.\n");
-        SetupDiDestroyDeviceInfoList(hDevInfo);
-        return 1;
-    }
-    pDetailData->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
-
-    // Get the device interface detail data
-    bResult = SetupDiGetDeviceInterfaceDetailW(hDevInfo, &devInterfaceData, pDetailData, requiredSize, &requiredSize, NULL);
-    if (!bResult) {
-        printf("Error: SetupDiGetDeviceInterfaceDetailW failed: %d\n", GetLastError());
-        free(pDetailData);
-        SetupDiDestroyDeviceInfoList(hDevInfo);
-        return 1;
-    }
-
-    // Open a handle to the device
-    hDevice = CreateFileW(pDetailData->DevicePath, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL); // Opens connection to driver
-    if (hDevice == INVALID_HANDLE_VALUE) {
-        printf("Error: CreateFile failed: %d\n", GetLastError());
-        free(pDetailData);
-        SetupDiDestroyDeviceInfoList(hDevInfo);
-        return 1;
-    }
-
-    printf("Successfully opened handle to the device.\n");
-    printf("Device Path: %ws\n\n", pDetailData->DevicePath);
+        printf("Successfully opened handle to the device.\n\n");
 
     // Now, send the IOCTL to the driver
     SYSTEM_SECURITY_STATUS securityStatus = { 0 };
@@ -105,8 +54,6 @@ int main()
     }
 
     // Clean up
-    free(pDetailData);
-    SetupDiDestroyDeviceInfoList(hDevInfo);
     CloseHandle(hDevice);
 
     return 0;

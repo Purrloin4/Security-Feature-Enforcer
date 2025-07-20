@@ -22,6 +22,11 @@ Environment:
 #pragma alloc_text (PAGE, SFEnforcerEvtDriverContextCleanup)
 #endif
 
+
+#define SFE_DEVICE_NAME L"\\Device\\SFEnforcer"
+#define SFE_SYMBOLIC_LINK_NAME L"\\DosDevices\\SFEnforcer"
+
+
 NTSTATUS
 DriverEntry(
     _In_ PDRIVER_OBJECT  DriverObject,
@@ -33,13 +38,15 @@ DriverEntry(
     WDF_OBJECT_ATTRIBUTES attributes;
     PWDFDEVICE_INIT deviceInit = NULL;
     WDFDEVICE device;
+    UNICODE_STRING symbolicLinkName;
+    RtlInitUnicodeString(&symbolicLinkName, SFE_SYMBOLIC_LINK_NAME);
 
     //
     // Initialize WPP Tracing
     //
     WPP_INIT_TRACING(DriverObject, RegistryPath);
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "%!FUNC! Entry");
-
+    
     //
     // Register a cleanup callback
     //
@@ -69,6 +76,9 @@ DriverEntry(
         WPP_CLEANUP(DriverObject);
         return status;
     }
+    UNICODE_STRING deviceName;
+    RtlInitUnicodeString(&deviceName, SFE_DEVICE_NAME);
+    WdfDeviceInitAssignName(deviceInit, &deviceName);
 
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "Setting device as non-exclusive");
     WdfDeviceInitSetExclusive(deviceInit, FALSE);
@@ -82,16 +92,16 @@ DriverEntry(
     }
 
     //
-    // Create a device interface
-    //
-    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "Calling WdfDeviceCreateDeviceInterface");
-    status = WdfDeviceCreateDeviceInterface(device, &GUID_DEVINTERFACE_SFEnforcer, NULL);
+	// Create a Symbolic Link for the control device
+    //s
+	TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "Creating symbolic link for control device");
+    status = WdfDeviceCreateSymbolicLink(device, &symbolicLinkName);
     if (!NT_SUCCESS(status)) {
-        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER, "WdfDeviceCreateDeviceInterface failed %!STATUS!", status);
-        WPP_CLEANUP(DriverObject);
-        return status;
-    }
-
+		TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER, "WdfDeviceCreateSymbolicLink failed %!STATUS!", status);
+		WPP_CLEANUP(DriverObject);
+		return status;
+	}
+    
     //
     // Initialize the I/O Package and any Queues
     //
