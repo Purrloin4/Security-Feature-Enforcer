@@ -17,6 +17,7 @@ Environment:
 #include "driver.h"
 #include "queue.tmh"
 #include <wdmsec.h> // Required for SDDL_DEVOBJ_SYS_ALL_ADM_ALL
+#include <ntstrsafe.h> // For RtlStringCbPrintfA
 #pragma comment(lib, "Wdmsec.lib") // Link against Wdmsec.lib
 
 // Manually define structures and functions to avoid header conflicts with ntifs.h
@@ -32,6 +33,10 @@ typedef ULONG SYSTEM_INFORMATION_CLASS;
 #define CODE_INTEGRITY_OPTIONS_HVCI_KMCI_ENABLED 0x400
 #endif
 
+#ifndef SERVICE_DISABLED
+#define SERVICE_DISABLED 4
+#endif
+
 typedef struct _SYSTEM_CODE_INTEGRITY_INFORMATION {
     ULONG  Length;
     ULONG  CodeIntegrityOptions;
@@ -45,6 +50,13 @@ NTSYSAPI NTSTATUS NTAPI ZwQuerySystemInformation(
     _Out_opt_ PULONG                   ReturnLength
 );
 
+NTSYSAPI NTSTATUS NTAPI ZwQuerySystemEnvironmentValueEx(
+    _In_ PUNICODE_STRING VariableName,
+    _In_ LPGUID VendorGuid,
+    _Out_writes_bytes_to_opt_(*ValueLength, *ValueLength) PVOID Value,
+    _Inout_ PULONG ValueLength,
+    _Out_opt_ PULONG Attributes
+);
 
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text (PAGE, SFEnforcerQueueInitialize)
@@ -116,13 +128,20 @@ VOID GetSecurityStatus(_Out_ PSYSTEM_SECURITY_STATUS Status)
 {
     RtlZeroMemory(Status, sizeof(SYSTEM_SECURITY_STATUS));
     NTSTATUS ntStatus;
+    HANDLE hKey = NULL;
+    OBJECT_ATTRIBUTES objAttr;
 
     // 1. Check for HVCI (Memory Integrity)
     SYSTEM_CODE_INTEGRITY_INFORMATION sci_info = { 0 };
     sci_info.Length = sizeof(sci_info);
     ntStatus = ZwQuerySystemInformation(SystemCodeIntegrityInformation, &sci_info, sizeof(sci_info), NULL);
-    if (NT_SUCCESS(ntStatus) && (sci_info.CodeIntegrityOptions & CODE_INTEGRITY_OPTIONS_HVCI_KMCI_ENABLED)) {
-        Status->IsHvciEnabled = TRUE;
+    if (NT_SUCCESS(ntStatus)) {
+        if (sci_info.CodeIntegrityOptions & CODE_INTEGRITY_OPTIONS_HVCI_KMCI_ENABLED) {
+            Status->IsHvciEnabled = TRUE;
+        }
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "HVCI Check: Enabled = %d", Status->IsHvciEnabled);
+    } else {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_QUEUE, "HVCI Check: ZwQuerySystemInformation failed %!STATUS!", ntStatus);
     }
 
     // 2. Check for Secure Boot
@@ -134,23 +153,159 @@ VOID GetSecurityStatus(_Out_ PSYSTEM_SECURITY_STATUS Status)
     ULONG valueLength = sizeof(secureBootValue);
     ntStatus = ExGetFirmwareEnvironmentVariable(&varName, &EFI_GLOBAL_VARIABLE, &secureBootValue, &valueLength, NULL);
 
-
-    if (NT_SUCCESS(ntStatus) && secureBootValue == 1) {
-        Status->IsSecureBootEnabled = TRUE;
-    }
-
-    // 3. Check for TPM Presence
-    // A simple way is to try to get a pointer to the TPM device object.
-    UNICODE_STRING tpmDeviceName = RTL_CONSTANT_STRING(L"\\Device\\TPM");
-    PFILE_OBJECT fileObject = NULL;
-    PDEVICE_OBJECT deviceObject = NULL;
-    ntStatus = IoGetDeviceObjectPointer(&tpmDeviceName, FILE_READ_ATTRIBUTES, &fileObject, &deviceObject);
     if (NT_SUCCESS(ntStatus)) {
-        Status->IsTpmReady = TRUE;
-        // We got the pointer, now we must dereference it as we are done with it.
-        ObDereferenceObject(fileObject);
+        if (secureBootValue == 1) {
+            Status->IsSecureBootEnabled = TRUE;
+        }
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Secure Boot Check: Enabled = %d", Status->IsSecureBootEnabled);
+    } else {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_QUEUE, "Secure Boot Check: ExGetFirmwareEnvironmentVariable failed %!STATUS!", ntStatus);
     }
 
+    // 3. Check for TPM readiness using service enumeration.
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: Starting registry query for service enumeration.");
+    
+    UNICODE_STRING tpmEnumKeyName = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Services\\TPM\\Enum");
+    
+    InitializeObjectAttributes(&objAttr, &tpmEnumKeyName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    ntStatus = ZwOpenKey(&hKey, KEY_READ, &objAttr);
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: ZwOpenKey on TPM\\Enum returned %!STATUS!", ntStatus);
+
+    if (NT_SUCCESS(ntStatus)) {
+        UNICODE_STRING enumZeroValueName = RTL_CONSTANT_STRING(L"0");
+        UCHAR buffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + 256]; // Allow for longer strings
+        PKEY_VALUE_PARTIAL_INFORMATION pValueInfo = (PKEY_VALUE_PARTIAL_INFORMATION)buffer;
+        ULONG resultLength = 0;
+
+        ntStatus = ZwQueryValueKey(hKey, &enumZeroValueName, KeyValuePartialInformation, pValueInfo, sizeof(buffer), &resultLength);
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: ZwQueryValueKey on Enum\\0 returned %!STATUS!", ntStatus);
+
+        if (NT_SUCCESS(ntStatus) && (pValueInfo->Type == REG_SZ || pValueInfo->Type == REG_EXPAND_SZ)) {
+            // Check if we have actual data and it's not empty
+            if (pValueInfo->DataLength > sizeof(WCHAR)) {
+                // Log the enum value for debugging (just the length, not the actual string to avoid complexity)
+                TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: Enum\\0 value found (Length: %u)", pValueInfo->DataLength);
+                
+                // If there's a meaningful value in Enum\0, TPM is enumerated and ready
+                Status->IsTpmReady = TRUE;
+            } else {
+                TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: Enum\\0 value is empty or too short");
+            }
+        } else {
+            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: Enum\\0 value not found or wrong type");
+        }
+        // Also check the Count value to see how many TPM devices are enumerated
+        if (NT_SUCCESS(ZwOpenKey(&hKey, KEY_READ, &objAttr))) {
+            UNICODE_STRING countValueName = RTL_CONSTANT_STRING(L"Count");
+            UCHAR countBuffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(ULONG)];
+            PKEY_VALUE_PARTIAL_INFORMATION pCountInfo = (PKEY_VALUE_PARTIAL_INFORMATION)countBuffer;
+            ULONG countResultLength = 0;
+
+            ntStatus = ZwQueryValueKey(hKey, &countValueName, KeyValuePartialInformation, pCountInfo, sizeof(countBuffer), &countResultLength);
+            if (NT_SUCCESS(ntStatus) && pCountInfo->Type == REG_DWORD) {
+                ULONG tpmCount = *((PULONG)pCountInfo->Data);
+                TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: Enum\\Count value is %u", tpmCount);
+                
+                // If count is greater than 0, we have enumerated TPM devices
+                if (tpmCount > 0) {
+                    Status->IsTpmReady = TRUE;
+                }
+            } else {
+                TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: Enum\\Count query returned %!STATUS!", ntStatus);
+            }
+            ZwClose(hKey);
+            hKey = NULL;
+        }
+    } else {
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: TPM\\Enum key not accessible, TPM likely not present");
+    }
+
+    //// 4. For comparison, also check EkNoFetch (known to be unreliable in VMs)
+    //PVOID pValueBuffer = NULL;
+    //UNICODE_STRING endorsementKeyName = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Services\\TPM\\WMI\\Endorsement");
+    //InitializeObjectAttributes(&objAttr, &endorsementKeyName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    //ntStatus = ZwOpenKey(&hKey, KEY_READ, &objAttr);
+    //if (NT_SUCCESS(ntStatus)) {
+    //    UNICODE_STRING ekNoFetchValueName = RTL_CONSTANT_STRING(L"EkNoFetch");
+    //    UCHAR ekBuffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(ULONG)];
+    //    PKEY_VALUE_PARTIAL_INFORMATION pEkInfo = (PKEY_VALUE_PARTIAL_INFORMATION)ekBuffer;
+    //    ULONG ekResultLength = 0;
+
+    //    ntStatus = ZwQueryValueKey(hKey, &ekNoFetchValueName, KeyValuePartialInformation, pEkInfo, sizeof(ekBuffer), &ekResultLength);
+    //    if (NT_SUCCESS(ntStatus) && pEkInfo->Type == REG_DWORD) {
+    //        ULONG ekNoFetchValue = *((PULONG)pEkInfo->Data);
+    //        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Debug: EkNoFetch value is %u (for comparison)", ekNoFetchValue);
+    //    }
+    //    ZwClose(hKey);
+    //    hKey = NULL;
+    //}
+
+    //// 5. For debugging, query and log the UEFI variables without changing the status.
+    //TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Debug: Investigating UEFI variables.");
+    //static GUID ODUID_NAMESPACE_GUID = { 0xeaec226f, 0xc9a3, 0x477a, { 0xa8, 0x26, 0xdd, 0xc7, 0x16, 0xcd, 0xc0, 0xe3 } };
+    //ULONG attributes = 0;
+    //valueLength = 0;
+
+    //// Check for OfflineUniqueIDEKPub
+    //UNICODE_STRING oduidEkPubVarName = RTL_CONSTANT_STRING(L"OfflineUniqueIDEKPub");
+    //ntStatus = ZwQuerySystemEnvironmentValueEx(&oduidEkPubVarName, &ODUID_NAMESPACE_GUID, NULL, &valueLength, &attributes);
+    //TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Debug: Query for OfflineUniqueIDEKPub size returned %!STATUS!", ntStatus);
+    //if (ntStatus == STATUS_BUFFER_TOO_SMALL && valueLength > 0) {
+    //    pValueBuffer = ExAllocatePool2(POOL_FLAG_PAGED, valueLength, 'kpeT');
+    //    if (pValueBuffer) {
+    //        ntStatus = ZwQuerySystemEnvironmentValueEx(&oduidEkPubVarName, &ODUID_NAMESPACE_GUID, pValueBuffer, &valueLength, &attributes);
+    //        if (NT_SUCCESS(ntStatus)) {
+    //            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Debug: OfflineUniqueIDEKPub Value (Length: %u):", valueLength);
+    //            UCHAR* data = (UCHAR*)pValueBuffer;
+    //            ULONG i;
+    //            // Simple hex dump without sprintf - just log the first 32 bytes for debugging
+    //            for (i = 0; i < valueLength && i < 32; i += 4) {
+    //                if (i + 3 < valueLength) {
+    //                    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Offset %04X: %02X %02X %02X %02X", 
+    //                        i, data[i], data[i+1], data[i+2], data[i+3]);
+    //                } else {
+    //                    // Handle remaining bytes
+    //                    if (i < valueLength) {
+    //                        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Offset %04X: %02X", i, data[i]);
+    //                    }
+    //                    if (i + 1 < valueLength) {
+    //                        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Offset %04X: %02X %02X", i, data[i], data[i+1]);
+    //                    }
+    //                    if (i + 2 < valueLength) {
+    //                        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Offset %04X: %02X %02X %02X", i, data[i], data[i+1], data[i+2]);
+    //                    }
+    //                }
+    //            }
+    //        }
+    //        ExFreePoolWithTag(pValueBuffer, 'kpeT');
+    //        pValueBuffer = NULL;
+    //    }
+    //}
+
+    //// Check for OfflineUniqueIDRandomSeed
+    //valueLength = 0;
+    //UNICODE_STRING oduidSeedVarName = RTL_CONSTANT_STRING(L"OfflineUniqueIDRandomSeed");
+    //ntStatus = ZwQuerySystemEnvironmentValueEx(&oduidSeedVarName, &ODUID_NAMESPACE_GUID, NULL, &valueLength, &attributes);
+    //TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Debug: Query for OfflineUniqueIDRandomSeed size returned %!STATUS!", ntStatus);
+    //if (ntStatus == STATUS_BUFFER_TOO_SMALL && valueLength > 0) {
+    //    pValueBuffer = ExAllocatePool2(POOL_FLAG_PAGED, valueLength, 'kpeT');
+    //    if (pValueBuffer) {
+    //        ntStatus = ZwQuerySystemEnvironmentValueEx(&oduidSeedVarName, &ODUID_NAMESPACE_GUID, pValueBuffer, &valueLength, &attributes);
+    //        if (NT_SUCCESS(ntStatus)) {
+    //            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Debug: OfflineUniqueIDRandomSeed Value (Length: %u):", valueLength);
+    //            UCHAR* data = (UCHAR*)pValueBuffer;
+    //            ULONG i;
+    //            for (i = 0; i < valueLength && i < 32; i++) {
+    //                TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Byte %02u: %02X", i, data[i]);
+    //            }
+    //        }
+    //        ExFreePoolWithTag(pValueBuffer, 'kpeT');
+    //        pValueBuffer = NULL;
+    //    }
+    //}
+
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Final Security Status - HVCI: %d, Secure Boot: %d, TPM Ready: %d",
+        Status->IsHvciEnabled, Status->IsSecureBootEnabled, Status->IsTpmReady);
 }
 
 VOID
