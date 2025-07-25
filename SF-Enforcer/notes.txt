@@ -24,3 +24,29 @@ Test DSE in VM:
 2. msconfig -> disable Safe mode but dont press reboot now
 3. Reboot into Advanced startup (shift restart)
 4. Disable driver signature enforcement
+
+# Research Methodology for Thesis
+
+## TPM Detection Research
+- Used API Monitor to capture function calls made by PowerShell Get-Tpm command
+- Identified that Get-Tpm uses DOS device path \\??\TPM for TPM access
+- Discovered TBS (TPM Base Services) IOCTL 0x22BC0C for TPM command submission
+- Found that PowerShell uses ZwOpenFile on \\??\TPM followed by ZwDeviceIoControlFile with specific IOCTL
+- Implemented kernel-level equivalent using ZwOpenFile and ZwDeviceIoControlFile for secure TPM detection
+- Check TPM2 capabilities by reading from the TPM device directly with TPM2_GetCapability Command Structure (from TPM 2.0 Spec Part 3)
+
+In https://hal.science/hal-03088316v1/file/tpm_comm_signed.pdf staat uitgelegd hoe er wordt gecomuniceert met de TPM via de TBS IOCTLs.
+Dit vinden we ook terug in te IOCTLs die we hebben gevonden in de PowerShell API Monitor output.
+In TPM 2.0 Library Specification Part 3: Commands, Section 30.2 vinden we de getcapabilities command die we gebruiken om de TPM2 capabilities te lezen.
+
+## Security API Analysis  
+- Analyzed how PowerShell and Windows APIs detect various security features
+- Used API monitoring to reverse-engineer the exact system calls
+- Implemented kernel-level versions of user-mode security checks for more reliable detection
+- Focused on methods that cannot be easily bypassed or spoofed from user-mode
+
+## Key Findings
+- DOS device paths provide more reliable access than registry enumeration
+- Kernel-level detection is more secure than user-mode queries
+- IOCTL codes remain stable across reboots (confirmed 0x22BC0C for TBS)
+- Direct device access bypasses potential user-mode manipulation

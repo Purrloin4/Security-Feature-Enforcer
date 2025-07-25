@@ -67,6 +67,28 @@ NTSYSAPI NTSTATUS NTAPI ZwQuerySystemEnvironmentValueEx(
     _Out_opt_ PULONG Attributes
 );
 
+NTSYSAPI NTSTATUS NTAPI ZwOpenFile(
+    _Out_ PHANDLE FileHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _Out_ PIO_STATUS_BLOCK IoStatusBlock,
+    _In_ ULONG ShareAccess,
+    _In_ ULONG OpenOptions
+);
+
+NTSYSAPI NTSTATUS NTAPI ZwDeviceIoControlFile(
+    _In_ HANDLE FileHandle,
+    _In_opt_ HANDLE Event,
+    _In_opt_ PIO_APC_ROUTINE ApcRoutine,
+    _In_opt_ PVOID ApcContext,
+    _Out_ PIO_STATUS_BLOCK IoStatusBlock,
+    _In_ ULONG IoControlCode,
+    _In_reads_bytes_opt_(InputBufferLength) PVOID InputBuffer,
+    _In_ ULONG InputBufferLength,
+    _Out_writes_bytes_opt_(OutputBufferLength) PVOID OutputBuffer,
+    _In_ ULONG OutputBufferLength
+);
+
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text (PAGE, SFEnforcerQueueInitialize)
 #endif
@@ -199,131 +221,54 @@ VOID GetSecurityStatus(_Out_ PSYSTEM_SECURITY_STATUS Status)
         TraceEvents(TRACE_LEVEL_ERROR, TRACE_QUEUE, "Secure Boot Check: ExGetFirmwareEnvironmentVariable failed %!STATUS!", ntStatus);
     }
 
-    // 3. Check for TPM readiness using service enumeration.
-    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: Starting registry query for service enumeration.");
+    // 3. Check for TPM readiness using DOS device path (PowerShell method)
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: Starting DOS device path method (PowerShell Get-Tpm equivalent).");
     
-    UNICODE_STRING tpmEnumKeyName = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Services\\TPM\\Enum");
+    // Try DOS device path \\??\TPM - this is exactly what PowerShell Get-Tpm uses
+    UNICODE_STRING tpmDosDeviceName = RTL_CONSTANT_STRING(L"\\??\\TPM");
+    HANDLE hTpmDosDevice = NULL;
+    OBJECT_ATTRIBUTES tpmDosObjAttr;
+    IO_STATUS_BLOCK ioStatusBlock;
     
-    InitializeObjectAttributes(&objAttr, &tpmEnumKeyName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
-    ntStatus = ZwOpenKey(&hKey, KEY_READ, &objAttr);
-    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: ZwOpenKey on TPM\\Enum returned %!STATUS!", ntStatus);
-
+    InitializeObjectAttributes(&tpmDosObjAttr, &tpmDosDeviceName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    ntStatus = ZwOpenFile(&hTpmDosDevice, GENERIC_READ, &tpmDosObjAttr, &ioStatusBlock, FILE_SHARE_READ, FILE_NON_DIRECTORY_FILE);
+    
     if (NT_SUCCESS(ntStatus)) {
-        UNICODE_STRING enumZeroValueName = RTL_CONSTANT_STRING(L"0");
-        UCHAR buffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + 256]; // Allow for longer strings
-        PKEY_VALUE_PARTIAL_INFORMATION pValueInfo = (PKEY_VALUE_PARTIAL_INFORMATION)buffer;
-        ULONG resultLength = 0;
-
-        ntStatus = ZwQueryValueKey(hKey, &enumZeroValueName, KeyValuePartialInformation, pValueInfo, sizeof(buffer), &resultLength);
-        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: ZwQueryValueKey on Enum\\0 returned %!STATUS!", ntStatus);
-
-        if (NT_SUCCESS(ntStatus) && (pValueInfo->Type == REG_SZ || pValueInfo->Type == REG_EXPAND_SZ)) {
-            // Check if we have actual data and it's not empty
-            if (pValueInfo->DataLength > sizeof(WCHAR)) {
-                // Log the enum value for debugging (just the length, not the actual string to avoid complexity)
-                TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: Enum\\0 value found (Length: %u)", pValueInfo->DataLength);
-                
-                // If there's a meaningful value in Enum\0, TPM is enumerated and ready
-                Status->IsTpmReady = TRUE;
-            } else {
-                TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: Enum\\0 value is empty or too short");
-            }
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: SUCCESS - DOS device path \\??\\TPM accessible (PowerShell method)");
+        
+        // Try the exact IOCTL that PowerShell uses (0x22BC0C) for additional verification
+        // This is a TBS command submission IOCTL for TPM presence check
+        UCHAR tpmTestCommand[12] = { // TPM2_GetCapability for presence
+            0x80, 0x01,             // TPM_ST_NO_SESSIONS (tag = 0x8001)
+            0x00, 0x00, 0x00, 0x0C, // Command size = 12 bytes
+            0x00, 0x00, 0x01, 0x43, // TPM_CC_GetCapability = 0x143
+            0x00, 0x00,             // capability = TPM_CAP_FIRST (0x00)
+                };
+        UCHAR tpmResponse[1024] = { 0 };
+        IO_STATUS_BLOCK tpmIoStatus = { 0 };
+        
+        ntStatus = ZwDeviceIoControlFile(hTpmDosDevice, NULL, NULL, NULL, &tpmIoStatus, 
+                                       0x22BC0C, // Exact IOCTL from API monitoring PowerShell Get-Tpm
+                                       tpmTestCommand, sizeof(tpmTestCommand),
+                                       tpmResponse, sizeof(tpmResponse));
+        
+        if (NT_SUCCESS(ntStatus) || ntStatus == STATUS_PENDING) {
+            Status->IsTpmReady = TRUE;
+            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: TBS IOCTL 0x22BC0C successful - TPM is responding to commands");
         } else {
-            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: Enum\\0 value not found or wrong type");
+            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: TBS IOCTL 0x22BC0C failed %!STATUS! - but device path accessible", ntStatus);
         }
-        // Also check the Count value to see how many TPM devices are enumerated
-        if (NT_SUCCESS(ZwOpenKey(&hKey, KEY_READ, &objAttr))) {
-            UNICODE_STRING countValueName = RTL_CONSTANT_STRING(L"Count");
-            UCHAR countBuffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(ULONG)];
-            PKEY_VALUE_PARTIAL_INFORMATION pCountInfo = (PKEY_VALUE_PARTIAL_INFORMATION)countBuffer;
-            ULONG countResultLength = 0;
-
-            ntStatus = ZwQueryValueKey(hKey, &countValueName, KeyValuePartialInformation, pCountInfo, sizeof(countBuffer), &countResultLength);
-            if (NT_SUCCESS(ntStatus) && pCountInfo->Type == REG_DWORD) {
-                ULONG tpmCount = *((PULONG)pCountInfo->Data);
-                TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: Enum\\Count value is %u", tpmCount);
-                
-                // If count is greater than 0, we have enumerated TPM devices
-                if (tpmCount > 0) {
-                    Status->IsTpmReady = TRUE;
-                }
-            } else {
-                TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: Enum\\Count query returned %!STATUS!", ntStatus);
-            }
-            ZwClose(hKey);
-            hKey = NULL;
-        }
+        
+        ZwClose(hTpmDosDevice);
     } else {
-        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: TPM\\Enum key not accessible, TPM likely not present");
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: DOS device path \\??\\TPM failed %!STATUS! - TPM not available", ntStatus);
     }
-
-    //// 5. For debugging, query and log the UEFI variables without changing the status.
-    //TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Debug: Investigating UEFI variables.");
-    //static GUID ODUID_NAMESPACE_GUID = { 0xeaec226f, 0xc9a3, 0x477a, { 0xa8, 0x26, 0xdd, 0xc7, 0x16, 0xcd, 0xc0, 0xe3 } };
-    //ULONG attributes = 0;
-    //valueLength = 0;
-
-    //// Check for OfflineUniqueIDEKPub
-    //UNICODE_STRING oduidEkPubVarName = RTL_CONSTANT_STRING(L"OfflineUniqueIDEKPub");
-    //ntStatus = ZwQuerySystemEnvironmentValueEx(&oduidEkPubVarName, &ODUID_NAMESPACE_GUID, NULL, &valueLength, &attributes);
-    //TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Debug: Query for OfflineUniqueIDEKPub size returned %!STATUS!", ntStatus);
-    //if (ntStatus == STATUS_BUFFER_TOO_SMALL && valueLength > 0) {
-    //    pValueBuffer = ExAllocatePool2(POOL_FLAG_PAGED, valueLength, 'kpeT');
-    //    if (pValueBuffer) {
-    //        ntStatus = ZwQuerySystemEnvironmentValueEx(&oduidEkPubVarName, &ODUID_NAMESPACE_GUID, pValueBuffer, &valueLength, &attributes);
-    //        if (NT_SUCCESS(ntStatus)) {
-    //            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Debug: OfflineUniqueIDEKPub Value (Length: %u):", valueLength);
-    //            UCHAR* data = (UCHAR*)pValueBuffer;
-    //            ULONG i;
-    //            // Simple hex dump without sprintf - just log the first 32 bytes for debugging
-    //            for (i = 0; i < valueLength && i < 32; i += 4) {
-    //                if (i + 3 < valueLength) {
-    //                    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Offset %04X: %02X %02X %02X %02X", 
-    //                        i, data[i], data[i+1], data[i+2], data[i+3]);
-    //                } else {
-    //                    // Handle remaining bytes
-    //                    if (i < valueLength) {
-    //                        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Offset %04X: %02X", i, data[i]);
-    //                    }
-    //                    if (i + 1 < valueLength) {
-    //                        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Offset %04X: %02X %02X", i, data[i], data[i+1]);
-    //                    }
-    //                    if (i + 2 < valueLength) {
-    //                        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Offset %04X: %02X %02X %02X", i, data[i], data[i+1], data[i+2]);
-    //                    }
-    //                }
-    //            }
-    //        }
-    //        ExFreePoolWithTag(pValueBuffer, 'kpeT');
-    //        pValueBuffer = NULL;
-    //    }
-    //}
-
-    //// Check for OfflineUniqueIDRandomSeed
-    //valueLength = 0;
-    //UNICODE_STRING oduidSeedVarName = RTL_CONSTANT_STRING(L"OfflineUniqueIDRandomSeed");
-    //ntStatus = ZwQuerySystemEnvironmentValueEx(&oduidSeedVarName, &ODUID_NAMESPACE_GUID, NULL, &valueLength, &attributes);
-    //TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Debug: Query for OfflineUniqueIDRandomSeed size returned %!STATUS!", ntStatus);
-    //if (ntStatus == STATUS_BUFFER_TOO_SMALL && valueLength > 0) {
-    //    pValueBuffer = ExAllocatePool2(POOL_FLAG_PAGED, valueLength, 'kpeT');
-    //    if (pValueBuffer) {
-    //        ntStatus = ZwQuerySystemEnvironmentValueEx(&oduidSeedVarName, &ODUID_NAMESPACE_GUID, pValueBuffer, &valueLength, &attributes);
-    //        if (NT_SUCCESS(ntStatus)) {
-    //            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Debug: OfflineUniqueIDRandomSeed Value (Length: %u):", valueLength);
-    //            UCHAR* data = (UCHAR*)pValueBuffer;
-    //            ULONG i;
-    //            for (i = 0; i < valueLength && i < 32; i++) {
-    //                TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Byte %02u: %02X", i, data[i]);
-    //            }
-    //        }
-    //        ExFreePoolWithTag(pValueBuffer, 'kpeT');
-    //        pValueBuffer = NULL;
-    //    }
-    //}
+    
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: Final TPM Ready status = %s", Status->IsTpmReady ? "YES" : "NO");
 
     // 4. Check for Vulnerable Driver Blocklist via registry
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: Starting registry query.");
-    
+
     UNICODE_STRING vdbKeyName = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\CI\\Config");
     InitializeObjectAttributes(&objAttr, &vdbKeyName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
     ntStatus = ZwOpenKey(&hKey, KEY_READ, &objAttr);
@@ -342,31 +287,33 @@ VOID GetSecurityStatus(_Out_ PSYSTEM_SECURITY_STATUS Status)
             if (vdbValue == 1) {
                 Status->IsVulnerableDriverBlocklistEnabled = TRUE;
                 TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: Registry value shows blocklist is ENABLED");
-            } else {
+            }
+            else {
                 TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: Registry value shows blocklist is DISABLED");
             }
-        } else {
+        }
+        else {
             TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: VulnerableDriverBlocklistEnable registry value not found");
         }
         ZwClose(hKey);
         hKey = NULL;
-    } else {
+    }
+    else {
         TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: CI\\Config key not accessible");
     }
-
+    
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Security Analysis Summary:");
-	TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  --- SYSTEM_CODEINTEGRITY_INFORMATION kernel structure checks ---");
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  HVCI (Memory Integrity):     %s", Status->IsHvciEnabled ? "ENABLED" : "DISABLED");
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  DSE (Driver Sig. Enf.):      %s", Status->IsDseEnabled ? "ENABLED" : "DISABLED");
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  Test Signing:                %s", Status->IsTestSigningEnabled ? "ENABLED (risky)" : "DISABLED (secure)");
-	TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  --- Enviroment variable checks ---");
 	TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  Secure Boot:                 %s", Status->IsSecureBootEnabled ? "ENABLED" : "DISABLED");
-    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  --- Registry checks ---");
 	TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  TPM Ready:                   %s", Status->IsTpmReady ? "YES" : "NO");
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  Vulnerable Driver Blocklist: %s", Status->IsVulnerableDriverBlocklistEnabled ? "ENABLED (secure)" : "DISABLED (risky)");
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Final Security Status - HVCI: %d, Secure Boot: %d, TPM Ready: %d, DSE: %d, Test Signing: %d, Vulnerable Driver Blocklist: %d",
         Status->IsHvciEnabled, Status->IsSecureBootEnabled, Status->IsTpmReady, Status->IsDseEnabled, Status->IsTestSigningEnabled, Status->IsVulnerableDriverBlocklistEnabled);
 }
+
+
 
 VOID
 SFEnforcerEvtIoDeviceControl(
