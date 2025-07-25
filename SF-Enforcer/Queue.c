@@ -37,6 +37,15 @@ typedef ULONG SYSTEM_INFORMATION_CLASS;
 #define SERVICE_DISABLED 4
 #endif
 
+// Additional CI flags for core security checks
+#ifndef CODE_INTEGRITY_OPTIONS_ENABLED
+#define CODE_INTEGRITY_OPTIONS_ENABLED 0x01  // DSE - we want this ENABLED
+#endif
+
+#ifndef CODE_INTEGRITY_OPTIONS_TESTSIGN
+#define CODE_INTEGRITY_OPTIONS_TESTSIGN 0x02  // Test Signing - we want this DISABLED
+#endif
+
 typedef struct _SYSTEM_CODE_INTEGRITY_INFORMATION {
     ULONG  Length;
     ULONG  CodeIntegrityOptions;
@@ -131,17 +140,45 @@ VOID GetSecurityStatus(_Out_ PSYSTEM_SECURITY_STATUS Status)
     HANDLE hKey = NULL;
     OBJECT_ATTRIBUTES objAttr;
 
-    // 1. Check for HVCI (Memory Integrity)
+    // 1. Check Code Integrity Information (HVCI, DSE, Test Signing)
+    // All these checks use the same ZwQuerySystemInformation call
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Code Integrity Check: Starting comprehensive analysis.");
+    
     SYSTEM_CODE_INTEGRITY_INFORMATION sci_info = { 0 };
     sci_info.Length = sizeof(sci_info);
     ntStatus = ZwQuerySystemInformation(SystemCodeIntegrityInformation, &sci_info, sizeof(sci_info), NULL);
+    
     if (NT_SUCCESS(ntStatus)) {
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Code Integrity Check: CodeIntegrityOptions = 0x%X", sci_info.CodeIntegrityOptions);
+        
+        // Check HVCI (Memory Integrity) - flag 0x400
         if (sci_info.CodeIntegrityOptions & CODE_INTEGRITY_OPTIONS_HVCI_KMCI_ENABLED) {
             Status->IsHvciEnabled = TRUE;
+            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "HVCI Check: CODE_INTEGRITY_OPTIONS_HVCI_KMCI_ENABLED (0x400) is set - HVCI is active");
+        } else {
+            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "HVCI Check: CODE_INTEGRITY_OPTIONS_HVCI_KMCI_ENABLED (0x400) is NOT set - HVCI is inactive");
         }
-        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "HVCI Check: Enabled = %d", Status->IsHvciEnabled);
+        
+        // Check DSE (Driver Signature Enforcement) - flag 0x01
+        if (sci_info.CodeIntegrityOptions & CODE_INTEGRITY_OPTIONS_ENABLED) {
+            Status->IsDseEnabled = TRUE;
+            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "DSE Check: CODE_INTEGRITY_OPTIONS_ENABLED (0x01) is set - DSE is active");
+        } else {
+            TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "DSE Check: CODE_INTEGRITY_OPTIONS_ENABLED (0x01) is NOT set - DSE is inactive");
+        }
+        
+        // Check Test Signing - flag 0x02
+        if (sci_info.CodeIntegrityOptions & CODE_INTEGRITY_OPTIONS_TESTSIGN) {
+            Status->IsTestSigningEnabled = TRUE;
+            TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "Test Signing Check: CODE_INTEGRITY_OPTIONS_TESTSIGN (0x02) is set - Test signing is enabled (security risk)");
+        } else {
+            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Test Signing Check: CODE_INTEGRITY_OPTIONS_TESTSIGN (0x02) is NOT set - Test signing is disabled (good for security)");
+        }
+        
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Code Integrity Summary: HVCI=%d, DSE=%d, TestSigning=%d", 
+            Status->IsHvciEnabled, Status->IsDseEnabled, Status->IsTestSigningEnabled);
     } else {
-        TraceEvents(TRACE_LEVEL_ERROR, TRACE_QUEUE, "HVCI Check: ZwQuerySystemInformation failed %!STATUS!", ntStatus);
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_QUEUE, "Code Integrity Check: ZwQuerySystemInformation failed %!STATUS!", ntStatus);
     }
 
     // 2. Check for Secure Boot
@@ -220,26 +257,6 @@ VOID GetSecurityStatus(_Out_ PSYSTEM_SECURITY_STATUS Status)
         TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: TPM\\Enum key not accessible, TPM likely not present");
     }
 
-    //// 4. For comparison, also check EkNoFetch (known to be unreliable in VMs)
-    //PVOID pValueBuffer = NULL;
-    //UNICODE_STRING endorsementKeyName = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Services\\TPM\\WMI\\Endorsement");
-    //InitializeObjectAttributes(&objAttr, &endorsementKeyName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
-    //ntStatus = ZwOpenKey(&hKey, KEY_READ, &objAttr);
-    //if (NT_SUCCESS(ntStatus)) {
-    //    UNICODE_STRING ekNoFetchValueName = RTL_CONSTANT_STRING(L"EkNoFetch");
-    //    UCHAR ekBuffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(ULONG)];
-    //    PKEY_VALUE_PARTIAL_INFORMATION pEkInfo = (PKEY_VALUE_PARTIAL_INFORMATION)ekBuffer;
-    //    ULONG ekResultLength = 0;
-
-    //    ntStatus = ZwQueryValueKey(hKey, &ekNoFetchValueName, KeyValuePartialInformation, pEkInfo, sizeof(ekBuffer), &ekResultLength);
-    //    if (NT_SUCCESS(ntStatus) && pEkInfo->Type == REG_DWORD) {
-    //        ULONG ekNoFetchValue = *((PULONG)pEkInfo->Data);
-    //        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Debug: EkNoFetch value is %u (for comparison)", ekNoFetchValue);
-    //    }
-    //    ZwClose(hKey);
-    //    hKey = NULL;
-    //}
-
     //// 5. For debugging, query and log the UEFI variables without changing the status.
     //TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Debug: Investigating UEFI variables.");
     //static GUID ODUID_NAMESPACE_GUID = { 0xeaec226f, 0xc9a3, 0x477a, { 0xa8, 0x26, 0xdd, 0xc7, 0x16, 0xcd, 0xc0, 0xe3 } };
@@ -304,8 +321,51 @@ VOID GetSecurityStatus(_Out_ PSYSTEM_SECURITY_STATUS Status)
     //    }
     //}
 
-    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Final Security Status - HVCI: %d, Secure Boot: %d, TPM Ready: %d",
-        Status->IsHvciEnabled, Status->IsSecureBootEnabled, Status->IsTpmReady);
+    // 4. Check for Vulnerable Driver Blocklist via registry
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: Starting registry query.");
+    
+    UNICODE_STRING vdbKeyName = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\CI\\Config");
+    InitializeObjectAttributes(&objAttr, &vdbKeyName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    ntStatus = ZwOpenKey(&hKey, KEY_READ, &objAttr);
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: ZwOpenKey on CI\\Config returned %!STATUS!", ntStatus);
+
+    if (NT_SUCCESS(ntStatus)) {
+        UNICODE_STRING vdbValueName = RTL_CONSTANT_STRING(L"VulnerableDriverBlocklistEnable");
+        UCHAR vdbBuffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(ULONG)];
+        PKEY_VALUE_PARTIAL_INFORMATION pVdbInfo = (PKEY_VALUE_PARTIAL_INFORMATION)vdbBuffer;
+        ULONG vdbResultLength = 0;
+
+        ntStatus = ZwQueryValueKey(hKey, &vdbValueName, KeyValuePartialInformation, pVdbInfo, sizeof(vdbBuffer), &vdbResultLength);
+        if (NT_SUCCESS(ntStatus) && pVdbInfo->Type == REG_DWORD) {
+            ULONG vdbValue = *((PULONG)pVdbInfo->Data);
+            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: VulnerableDriverBlocklistEnable = %u", vdbValue);
+            if (vdbValue == 1) {
+                Status->IsVulnerableDriverBlocklistEnabled = TRUE;
+                TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: Registry value shows blocklist is ENABLED");
+            } else {
+                TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: Registry value shows blocklist is DISABLED");
+            }
+        } else {
+            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: VulnerableDriverBlocklistEnable registry value not found");
+        }
+        ZwClose(hKey);
+        hKey = NULL;
+    } else {
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: CI\\Config key not accessible");
+    }
+
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Security Analysis Summary:");
+	TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  --- SYSTEM_CODEINTEGRITY_INFORMATION kernel structure checks ---");
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  HVCI (Memory Integrity):     %s", Status->IsHvciEnabled ? "ENABLED" : "DISABLED");
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  DSE (Driver Sig. Enf.):      %s", Status->IsDseEnabled ? "ENABLED" : "DISABLED");
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  Test Signing:                %s", Status->IsTestSigningEnabled ? "ENABLED (risky)" : "DISABLED (secure)");
+	TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  --- Enviroment variable checks ---");
+	TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  Secure Boot:                 %s", Status->IsSecureBootEnabled ? "ENABLED" : "DISABLED");
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  --- Registry checks ---");
+	TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  TPM Ready:                   %s", Status->IsTpmReady ? "YES" : "NO");
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  Vulnerable Driver Blocklist: %s", Status->IsVulnerableDriverBlocklistEnabled ? "ENABLED (secure)" : "DISABLED (risky)");
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Final Security Status - HVCI: %d, Secure Boot: %d, TPM Ready: %d, DSE: %d, Test Signing: %d, Vulnerable Driver Blocklist: %d",
+        Status->IsHvciEnabled, Status->IsSecureBootEnabled, Status->IsTpmReady, Status->IsDseEnabled, Status->IsTestSigningEnabled, Status->IsVulnerableDriverBlocklistEnabled);
 }
 
 VOID

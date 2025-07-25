@@ -1,4 +1,4 @@
-#include <initguid.h>
+﻿#include <initguid.h>
 #include <Windows.h>
 #include <stdio.h>
 #include <tbs.h> // Include the TBS header
@@ -57,9 +57,12 @@ int main()
     }
     else if (bytesReturned == sizeof(SYSTEM_SECURITY_STATUS)) {
         printf("\n--- System Security Status ---\n");
-        printf("Memory Integrity (HVCI): %s\n", securityStatus.IsHvciEnabled ? "Enabled" : "Disabled");
-        printf("Secure Boot:             %s\n", securityStatus.IsSecureBootEnabled ? "Enabled" : "Disabled");
-        printf("TPM Ready:               %s\n", securityStatus.IsTpmReady ? "Yes" : "No");
+        printf("Memory Integrity (HVCI):      %s\n", securityStatus.IsHvciEnabled ? "[+] Enabled" : "[-] Disabled");
+        printf("Secure Boot:                  %s\n", securityStatus.IsSecureBootEnabled ? "[+] Enabled" : "[-] Disabled");
+        printf("TPM Ready:                    %s\n", securityStatus.IsTpmReady ? "[+] Yes" : "[-] No");
+        printf("DSE (Driver Signature Enf.):  %s\n", securityStatus.IsDseEnabled ? "[+] Enabled" : "[-] Disabled");
+        printf("Test Signing:                 %s\n", securityStatus.IsTestSigningEnabled ? "[-] Enabled (risky)" : "[+] Disabled (secure)");
+        printf("Vulnerable Driver Blocklist:  %s\n", securityStatus.IsVulnerableDriverBlocklistEnabled ? "[+] Enabled" : "[-] Disabled");
         printf("------------------------------\n");
     }
     else {

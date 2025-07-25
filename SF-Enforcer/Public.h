@@ -43,4 +43,7 @@ typedef struct _SYSTEM_SECURITY_STATUS {
     BOOLEAN IsHvciEnabled;
     BOOLEAN IsSecureBootEnabled;
     BOOLEAN IsTpmReady;
+    BOOLEAN IsDseEnabled;
+    BOOLEAN IsTestSigningEnabled;
+    BOOLEAN IsVulnerableDriverBlocklistEnabled;
 } SYSTEM_SECURITY_STATUS, * PSYSTEM_SECURITY_STATUS;

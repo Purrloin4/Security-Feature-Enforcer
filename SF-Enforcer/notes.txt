@@ -19,3 +19,8 @@ sc.exe create SFEnforcer type= kernel binPath= C:\Users\User\Documents\SF-Checke
 sc.exe start SFEnforcer
 sc.exe delete SFEnforcer
 
+Test DSE in VM:
+1. msconfig -> boot insto Safe mode
+2. msconfig -> disable Safe mode but dont press reboot now
+3. Reboot into Advanced startup (shift restart)
+4. Disable driver signature enforcement
