@@ -1,19 +1,13 @@
 Admin terminal VM:
 
+-- Network debugging (https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/setting-up-network-debugging-of-a-virtual-machine-host) --
 bcdedit /set TESTSIGNING on
 bcdedit /debug on
-bcdedit /dbgsettings serial debugport:1 baudrate:115200
 
-Admin terminal host:
+cd C:\KDNET
+.\kdnet.exe 192.168.1.186 50005
 
-Get-VMComPort -VMName Win11-dev
-Set-VMComPort -VMName Win11-dev -Path \\.\pipe\SFE-Debug -Number 1
-
-# WinDbg Connection String (run on host):
-# windbg.exe -k com:pipe,port=\\.\pipe\SFE-Debug,baud=115200
-
-certutil.exe -addstore "Root" "SF-Enforcer.cer"
-certutil.exe -f -addstore "TrustedPublisher" "SF-Enforcer.cer"
+-- Manual load driver --
 
 sc.exe create SFEnforcer type= kernel binPath= C:\Users\User\Documents\SF-Checker\2\SF-Enforcer.sys
 sc.exe start SFEnforcer

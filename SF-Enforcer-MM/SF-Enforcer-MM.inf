@@ -1,0 +1,62 @@
+;
+; SF-Enforcer-MM.inf
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System ; TODO: specify appropriate Class
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318} ; TODO: specify appropriate ClassGuid
+Provider    = %ManufacturerName%
+CatalogFile = SF-Enforcer-MM.cat
+DriverVer   = ; TODO: set DriverVer in stampinf property pages
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+SF-Enforcer-MM.sys = 1,,
+
+;*****************************************
+; Install Section
+;*****************************************
+
+[Manufacturer]
+%ManufacturerName% = Standard,NT$ARCH$.10.0...16299 ; %13% support introduced in build 16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%SF-Enforcer-MM.DeviceDesc% = SF-Enforcer-MM_Device, Root\SF-Enforcer-MM ; TODO: edit hw-id
+
+[SF-Enforcer-MM_Device.NT]
+CopyFiles = File_Copy
+
+[File_Copy]
+SF-Enforcer-MM.sys
+
+;-------------- Service installation
+[SF-Enforcer-MM_Device.NT.Services]
+AddService = SF-Enforcer-MM,%SPSVCINST_ASSOCSERVICE%, SF-Enforcer-MM_Service_Inst
+
+; -------------- SF-Enforcer-MM driver install sections
+[SF-Enforcer-MM_Service_Inst]
+DisplayName    = %SF-Enforcer-MM.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %13%\SF-Enforcer-MM.sys
+
+[SF-Enforcer-MM_Device.NT.Wdf]
+KmdfService = SF-Enforcer-MM, SF-Enforcer-MM_wdfsect
+
+[SF-Enforcer-MM_wdfsect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+SPSVCINST_ASSOCSERVICE = 0x00000002
+ManufacturerName = "<Your manufacturer name>" ;TODO: Replace with your manufacturer name
+DiskName = "SF-Enforcer-MM Installation Disk"
+SF-Enforcer-MM.DeviceDesc = "SF-Enforcer-MM Device"
+SF-Enforcer-MM.SVCDESC = "SF-Enforcer-MM Service"
