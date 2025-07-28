@@ -28,8 +28,26 @@ NTSYSAPI NTSTATUS NTAPI ExGetFirmwareEnvironmentVariable(
     _Out_opt_ PULONG Attributes
 );
 
-// Simple global variable to store our "Secure Boot" status
+// Code Integrity function declaration
+NTSYSAPI NTSTATUS NTAPI ZwQuerySystemInformation(
+    _In_      ULONG SystemInformationClass,
+    _Inout_   PVOID SystemInformation,
+    _In_      ULONG SystemInformationLength,
+    _Out_opt_ PULONG ReturnLength
+);
+
+// Code Integrity constants (only for Test Signing)
+#define SystemCodeIntegrityInformation 0x67
+#define CODE_INTEGRITY_OPTIONS_TESTSIGN 0x02  // Test Signing
+
+typedef struct _SYSTEM_CODE_INTEGRITY_INFORMATION {
+    ULONG Length;
+    ULONG CodeIntegrityOptions;
+} SYSTEM_CODE_INTEGRITY_INFORMATION, *PSYSTEM_CODE_INTEGRITY_INFORMATION;
+
+// Global variables for status
 static BOOLEAN g_SecureBootStatus = FALSE;
+static BOOLEAN g_TestSigningStatus = FALSE;
 
 NTSTATUS DriverEntry(
     _In_ PDRIVER_OBJECT  DriverObject,
@@ -39,9 +57,34 @@ NTSTATUS DriverEntry(
     UNREFERENCED_PARAMETER(DriverObject);
     UNREFERENCED_PARAMETER(RegistryPath);
     
-    DbgPrintEx(0, 0, "[SF-Enforcer-MM] Hello world! Driver loaded successfully\n");
+    DbgPrintEx(0, 0, "[SF-Enforcer-MM] ======= SF-Enforcer Manual Mapped Driver =======\n");
+    DbgPrintEx(0, 0, "[SF-Enforcer-MM] Starting Test Signing + Secure Boot analysis...\n");
     
-    // UEFI Secure Boot check
+    // 1. TEST SIGNING CHECK
+    DbgPrintEx(0, 0, "[SF-Enforcer-MM] === Test Signing Analysis ===\n");
+    
+    SYSTEM_CODE_INTEGRITY_INFORMATION sciInfo = { 0 };
+    sciInfo.Length = sizeof(sciInfo);
+    NTSTATUS ntStatus = ZwQuerySystemInformation(SystemCodeIntegrityInformation, &sciInfo, sizeof(sciInfo), NULL);
+    
+    if (NT_SUCCESS(ntStatus)) {
+        DbgPrintEx(0, 0, "[SF-Enforcer-MM] Code Integrity Options: 0x%X\n", sciInfo.CodeIntegrityOptions);
+        
+        // Check Test Signing (flag 0x02)
+        if (sciInfo.CodeIntegrityOptions & CODE_INTEGRITY_OPTIONS_TESTSIGN) {
+            g_TestSigningStatus = TRUE;
+            DbgPrintEx(0, 0, "[SF-Enforcer-MM] Test Signing: ENABLED (flag 0x02 set) - SECURITY RISK!\n");
+        } else {
+            DbgPrintEx(0, 0, "[SF-Enforcer-MM] Test Signing: DISABLED (flag 0x02 not set) - Secure\n");
+        }
+        
+    } else {
+        DbgPrintEx(0, 0, "[SF-Enforcer-MM] Code Integrity check failed: 0x%X\n", ntStatus);
+    }
+    
+    // 2. UEFI SECURE BOOT CHECK (PURE UEFI - NO REGISTRY FALLBACK)
+    DbgPrintEx(0, 0, "[SF-Enforcer-MM] === UEFI Secure Boot Analysis ===\n");
+    
     UNICODE_STRING varName;
     RtlInitUnicodeString(&varName, L"SecureBoot");
     
@@ -50,7 +93,7 @@ NTSTATUS DriverEntry(
     GUID EFI_GLOBAL_VARIABLE = { 0x8BE4DF61, 0x93CA, 0x11D2, { 0xAA, 0x0D, 0x00, 0xE0, 0x98, 0x03, 0x2B, 0x8C } };
     ULONG valueLength = sizeof(secureBootValue);
     
-    NTSTATUS ntStatus = ExGetFirmwareEnvironmentVariable(&varName, &EFI_GLOBAL_VARIABLE, &secureBootValue, &valueLength, NULL);
+    ntStatus = ExGetFirmwareEnvironmentVariable(&varName, &EFI_GLOBAL_VARIABLE, &secureBootValue, &valueLength, NULL);
     
     if (NT_SUCCESS(ntStatus)) {
         if (secureBootValue == 1) {
@@ -60,11 +103,16 @@ NTSTATUS DriverEntry(
             DbgPrintEx(0, 0, "[SF-Enforcer-MM] UEFI Secure Boot: DISABLED (verified via UEFI variable)\n");
         }
         DbgPrintEx(0, 0, "[SF-Enforcer-MM] UEFI SecureBoot variable value: %u\n", secureBootValue);
+    } else {
+        DbgPrintEx(0, 0, "[SF-Enforcer-MM] UEFI access failed: 0x%X - Cannot determine Secure Boot status\n", ntStatus);
     }
-    else {
-        DbgPrintEx(0, 0, "[SF-Enforcer-MM] UEFI access failed: 0x%X\n", ntStatus);
-    }
-    DbgPrintEx(0, 0, "[SF-Enforcer-MM] Final Secure Boot Status: %s\n", g_SecureBootStatus ? "ENABLED" : "DISABLED");
     
+    // 3. SECURITY SUMMARY (Focus on Test Signing + Secure Boot)
+    DbgPrintEx(0, 0, "[SF-Enforcer-MM] ======= SECURITY ANALYSIS SUMMARY =======\n");
+    DbgPrintEx(0, 0, "[SF-Enforcer-MM] Test Signing:                %s\n", g_TestSigningStatus ? "ENABLED" : "DISABLED");
+    DbgPrintEx(0, 0, "[SF-Enforcer-MM] Secure Boot:                 %s\n", g_SecureBootStatus ? "ENABLED" : "DISABLED");
+    DbgPrintEx(0, 0, "[SF-Enforcer-MM] ============================================\n");
+    
+
     return STATUS_SUCCESS;
 }
