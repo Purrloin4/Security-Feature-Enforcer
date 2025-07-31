@@ -23,18 +23,33 @@ Environment:
 // Manually define structures and functions to avoid header conflicts with ntifs.h
 typedef ULONG SYSTEM_INFORMATION_CLASS;
 
-// Define the constants for SYSTEM_INFORMATION_CLASS to check for code integrity information source: https://www.geoffchappell.com/studies/windows/km/ntoskrnl/api/ex/sysinfo/codeintegrity.htm
+
+// Define the SYSTEM_INFORMATION_CLASS for code integrity information
 
 #ifndef SystemCodeIntegrityInformation
 #define SystemCodeIntegrityInformation 0x67
 #endif
 
-#ifndef CODE_INTEGRITY_OPTIONS_HVCI_KMCI_ENABLED
-#define CODE_INTEGRITY_OPTIONS_HVCI_KMCI_ENABLED 0x400
-#endif
 
-#ifndef SERVICE_DISABLED
-#define SERVICE_DISABLED 4
+
+// Structure for SYSTEM_CODE_INTEGRITY_INFORMATION, parameter for ZwQuerySystemInformation
+typedef struct _SYSTEM_CODE_INTEGRITY_INFORMATION {
+    ULONG  Length;
+    ULONG  CodeIntegrityOptions;
+} SYSTEM_CODE_INTEGRITY_INFORMATION, * PSYSTEM_CODE_INTEGRITY_INFORMATION;
+
+// ZwQuerySystemInformation is the "undocumented" kernel function of NtQuerySystemInformation source: https://www.geoffchappell.com/studies/windows/km/ntoskrnl/api/ex/sysinfo/query.htm
+// It has the same syntax as NtQuerySystemInformation, but is used directly in kernel mode drivers
+NTSYSAPI NTSTATUS NTAPI ZwQuerySystemInformation(
+    _In_      SYSTEM_INFORMATION_CLASS SystemInformationClass,
+    _Inout_   PVOID                    SystemInformation,
+    _In_      ULONG                    SystemInformationLength,
+    _Out_opt_ PULONG                   ReturnLength
+);
+
+// Define the constants for SYSTEM_INFORMATION_CLASS to check for code integrity information source: https://www.geoffchappell.com/studies/windows/km/ntoskrnl/api/ex/sysinfo/codeintegrity.htms
+#ifndef CODE_INTEGRITY_OPTIONS_HVCI_KMCI_ENABLED
+#define CODE_INTEGRITY_OPTIONS_HVCI_KMCI_ENABLED 0x400 // HVCI - we want this ENABLED
 #endif
 
 #ifndef CODE_INTEGRITY_OPTIONS_ENABLED
@@ -44,19 +59,6 @@ typedef ULONG SYSTEM_INFORMATION_CLASS;
 #ifndef CODE_INTEGRITY_OPTIONS_TESTSIGN
 #define CODE_INTEGRITY_OPTIONS_TESTSIGN 0x02  // Test Signing - we want this DISABLED
 #endif
-
-typedef struct _SYSTEM_CODE_INTEGRITY_INFORMATION {
-    ULONG  Length;
-    ULONG  CodeIntegrityOptions;
-} SYSTEM_CODE_INTEGRITY_INFORMATION, * PSYSTEM_CODE_INTEGRITY_INFORMATION;
-
-// ZwQuerySystemInformation is the undocumented kernel function of NtQuerySystemInformation source: https://www.geoffchappell.com/studies/windows/km/ntoskrnl/api/ex/sysinfo/query.htm
-NTSYSAPI NTSTATUS NTAPI ZwQuerySystemInformation(
-    _In_      SYSTEM_INFORMATION_CLASS SystemInformationClass,
-    _Inout_   PVOID                    SystemInformation,
-    _In_      ULONG                    SystemInformationLength,
-    _Out_opt_ PULONG                   ReturnLength
-);
 
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text (PAGE, SFEnforcerQueueInitialize)
@@ -371,10 +373,7 @@ VOID LogSecuritySummary(_In_ PSYSTEM_SECURITY_STATUS Status)
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  Test Signing:                %s", Status->IsTestSigningEnabled ? "ENABLED (risky)" : "DISABLED (secure)");
 	TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  Secure Boot:                 %s", Status->IsSecureBootEnabled ? "ENABLED" : "DISABLED");
 	TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  TPM Ready:                   %s", Status->IsTpmReady ? "YES" : "NO");
-    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  IOMMU Functional:            %s", Status->IsIommuEnabled ? "YES" : "NO");
-    if (Status->IsIommuEnabled) {
-        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  IOMMU Active Protection:     %s", Status->IsHvciEnabled ? "YES (via HVCI)" : "NO (HVCI disabled)");
-    }
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  IOMMU Enabled:            %s", Status->IsIommuEnabled ? "YES" : "NO");
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  Vulnerable Driver Blocklist: %s", Status->IsVulnerableDriverBlocklistEnabled ? "ENABLED (secure)" : "DISABLED (risky)");
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Final Security Status - HVCI: %d, Secure Boot: %d, TPM Ready: %d, DSE: %d, Test Signing: %d, IOMMU Functional: %d, Vulnerable Driver Blocklist: %d",
         Status->IsHvciEnabled, Status->IsSecureBootEnabled, Status->IsTpmReady, Status->IsDseEnabled, Status->IsTestSigningEnabled, Status->IsIommuEnabled, Status->IsVulnerableDriverBlocklistEnabled);
