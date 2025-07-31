@@ -37,7 +37,6 @@ typedef ULONG SYSTEM_INFORMATION_CLASS;
 #define SERVICE_DISABLED 4
 #endif
 
-// Additional CI flags for core security checks
 #ifndef CODE_INTEGRITY_OPTIONS_ENABLED
 #define CODE_INTEGRITY_OPTIONS_ENABLED 0x01  // DSE - we want this ENABLED
 #endif
@@ -57,36 +56,6 @@ NTSYSAPI NTSTATUS NTAPI ZwQuerySystemInformation(
     _Inout_   PVOID                    SystemInformation,
     _In_      ULONG                    SystemInformationLength,
     _Out_opt_ PULONG                   ReturnLength
-);
-
-NTSYSAPI NTSTATUS NTAPI ZwQuerySystemEnvironmentValueEx(
-    _In_ PUNICODE_STRING VariableName,
-    _In_ LPGUID VendorGuid,
-    _Out_writes_bytes_to_opt_(*ValueLength, *ValueLength) PVOID Value,
-    _Inout_ PULONG ValueLength,
-    _Out_opt_ PULONG Attributes
-);
-
-NTSYSAPI NTSTATUS NTAPI ZwOpenFile(
-    _Out_ PHANDLE FileHandle,
-    _In_ ACCESS_MASK DesiredAccess,
-    _In_ POBJECT_ATTRIBUTES ObjectAttributes,
-    _Out_ PIO_STATUS_BLOCK IoStatusBlock,
-    _In_ ULONG ShareAccess,
-    _In_ ULONG OpenOptions
-);
-
-NTSYSAPI NTSTATUS NTAPI ZwDeviceIoControlFile(
-    _In_ HANDLE FileHandle,
-    _In_opt_ HANDLE Event,
-    _In_opt_ PIO_APC_ROUTINE ApcRoutine,
-    _In_opt_ PVOID ApcContext,
-    _Out_ PIO_STATUS_BLOCK IoStatusBlock,
-    _In_ ULONG IoControlCode,
-    _In_reads_bytes_opt_(InputBufferLength) PVOID InputBuffer,
-    _In_ ULONG InputBufferLength,
-    _Out_writes_bytes_opt_(OutputBufferLength) PVOID OutputBuffer,
-    _In_ ULONG OutputBufferLength
 );
 
 #ifdef ALLOC_PRAGMA
@@ -266,7 +235,61 @@ VOID GetSecurityStatus(_Out_ PSYSTEM_SECURITY_STATUS Status)
     
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: Final TPM Ready status = %s", Status->IsTpmReady ? "YES" : "NO");
 
-    // 4. Check for Vulnerable Driver Blocklist via registry
+    // 4. Check for IOMMU availability and functionality using IoGetIommuInterfaceEx
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "IOMMU Check: Starting IOMMU functionality test using V1 interface.");
+    
+    DMA_IOMMU_INTERFACE_EX iommuInterface;
+    RtlZeroMemory(&iommuInterface, sizeof(iommuInterface));
+
+    ntStatus = IoGetIommuInterfaceEx(1, 0ULL, &iommuInterface);
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "IOMMU Check: IoGetIommuInterfaceEx returned status: %!STATUS! (0x%08X)", ntStatus, ntStatus);
+
+    if (NT_SUCCESS(ntStatus)) {
+        if (iommuInterface.Version >= 1) {            
+            if (iommuInterface.V1.CreateDomain != NULL && iommuInterface.V1.DeleteDomain != NULL) 
+            {                
+                PIOMMU_DMA_DOMAIN testDomain = NULL;
+                __try {
+                    ntStatus = iommuInterface.V1.CreateDomain(FALSE, &testDomain);
+                    
+                    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "IOMMU Check: CreateDomain test returned status: %!STATUS! (0x%08X)", ntStatus, ntStatus);
+                    
+                    if (NT_SUCCESS(ntStatus) && testDomain != NULL) {
+                        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "IOMMU Check: SUCCESS - Domain created successfully! IOMMU is FUNCTIONAL!");
+                        Status->IsIommuEnabled = TRUE;
+                        
+                        // Clean up the test domain immediately
+                        __try {
+                            NTSTATUS deleteStatus = iommuInterface.V1.DeleteDomain(testDomain);
+                            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "IOMMU Check: Test domain cleanup - DeleteDomain returned %!STATUS!", deleteStatus);
+                        }
+                        __except(EXCEPTION_EXECUTE_HANDLER) {
+                            TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "IOMMU Check: Exception during domain cleanup (0x%08X)", GetExceptionCode());
+                        }
+                    } else {
+                            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "IOMMU Check: Domain creation failed with status 0x%08X", ntStatus);
+                    }
+                }
+                __except(EXCEPTION_EXECUTE_HANDLER) {
+                    TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "IOMMU Check: Exception during domain creation test (0x%08X)", GetExceptionCode());
+                    
+                }
+            } else {
+                TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "IOMMU Check: CreateDomain or DeleteDomain function pointers are NULL");
+            }
+        } else {
+            TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "IOMMU Check: Interface version (%u) is less than 1 - V1 functions not available", iommuInterface.Version);
+        }
+        
+    } else {
+        TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "IOMMU Check: Failed to obtain IOMMU interface - %!STATUS!", ntStatus);
+    }
+    
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "IOMMU Check: Final IOMMU functionality status = %s", 
+        Status->IsIommuEnabled ? "FUNCTIONAL" : "NOT FUNCTIONAL");
+
+
+    // 5. Check for Vulnerable Driver Blocklist via registry
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: Starting registry query.");
 
     UNICODE_STRING vdbKeyName = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\CI\\Config");
@@ -308,9 +331,13 @@ VOID GetSecurityStatus(_Out_ PSYSTEM_SECURITY_STATUS Status)
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  Test Signing:                %s", Status->IsTestSigningEnabled ? "ENABLED (risky)" : "DISABLED (secure)");
 	TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  Secure Boot:                 %s", Status->IsSecureBootEnabled ? "ENABLED" : "DISABLED");
 	TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  TPM Ready:                   %s", Status->IsTpmReady ? "YES" : "NO");
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  IOMMU Functional:            %s", Status->IsIommuEnabled ? "YES" : "NO");
+    if (Status->IsIommuEnabled) {
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  IOMMU Active Protection:     %s", Status->IsHvciEnabled ? "YES (via HVCI)" : "NO (HVCI disabled)");
+    }
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  Vulnerable Driver Blocklist: %s", Status->IsVulnerableDriverBlocklistEnabled ? "ENABLED (secure)" : "DISABLED (risky)");
-    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Final Security Status - HVCI: %d, Secure Boot: %d, TPM Ready: %d, DSE: %d, Test Signing: %d, Vulnerable Driver Blocklist: %d",
-        Status->IsHvciEnabled, Status->IsSecureBootEnabled, Status->IsTpmReady, Status->IsDseEnabled, Status->IsTestSigningEnabled, Status->IsVulnerableDriverBlocklistEnabled);
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Final Security Status - HVCI: %d, Secure Boot: %d, TPM Ready: %d, DSE: %d, Test Signing: %d, IOMMU Functional: %d, Vulnerable Driver Blocklist: %d",
+        Status->IsHvciEnabled, Status->IsSecureBootEnabled, Status->IsTpmReady, Status->IsDseEnabled, Status->IsTestSigningEnabled, Status->IsIommuEnabled, Status->IsVulnerableDriverBlocklistEnabled);
 }
 
 

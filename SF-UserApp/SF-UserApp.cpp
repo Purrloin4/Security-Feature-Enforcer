@@ -61,15 +61,17 @@ int main()
         printf("Code Integrity Check: DSE (Driver Sig. Enf.):               %s\n", securityStatus.IsDseEnabled ? "[+] ENABLED" : "[-] DISABLED");
         printf("Code Integrity Check: Test Signing:                         %s\n", securityStatus.IsTestSigningEnabled ? "[-] ENABLED (risky)" : "[+] DISABLED (secure)");
         printf("Environment Check: Secure Boot:                             %s\n", securityStatus.IsSecureBootEnabled ? "[+] ENABLED" : "[-] DISABLED");
-        printf("Driver check and dirrect coms with TMP driver: TPM Ready:   %s\n", securityStatus.IsTpmReady ? "[+] YES" : "[-] NO");
-        printf("Registry Check: Vulnerable Driver Blocklist:                %s\n", securityStatus.IsVulnerableDriverBlocklistEnabled ? "[+] ENABLED" : "[-] DISABLED)");
+        printf("Driver check and direct coms with TPM driver: TPM Ready:    %s\n", securityStatus.IsTpmReady ? "[+] YES" : "[-] NO");
+        printf("Kernel API Check: IOMMU Available:                          %s\n", securityStatus.IsIommuEnabled ? "[+] YES" : "[-] NO");
+        printf("Registry Check: Vulnerable Driver Blocklist:                %s\n", securityStatus.IsVulnerableDriverBlocklistEnabled ? "[+] ENABLED" : "[-] DISABLED");
         printf("------------------------------\n");
-        printf("Security Analysis Summary: HVCI=%s, Secure Boot=%s, TPM Ready=%s, DSE=%s, Test Signing=%s, VDB=%s\n",
+        printf("Security Analysis Summary: HVCI=%s, Secure Boot=%s, TPM Ready=%s, DSE=%s, Test Signing=%s, IOMMU=%s, VDB=%s\n",
             securityStatus.IsHvciEnabled ? "ENABLED" : "DISABLED",
             securityStatus.IsSecureBootEnabled ? "ENABLED" : "DISABLED", 
             securityStatus.IsTpmReady ? "YES" : "NO",
             securityStatus.IsDseEnabled ? "ENABLED" : "DISABLED",
             securityStatus.IsTestSigningEnabled ? "ENABLED" : "DISABLED",
+            securityStatus.IsIommuEnabled ? "YES" : "NO",
             securityStatus.IsVulnerableDriverBlocklistEnabled ? "ENABLED" : "DISABLED");
     }
     else {

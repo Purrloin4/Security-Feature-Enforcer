@@ -20,12 +20,6 @@ This is a **secure** manual mapped version of the SF-Enforcer driver that uses *
 - **Kernel-level access**: Requires kernel privileges to read
 - **Source of truth**: Actual firmware state, not a cached copy
 
-### **Registry (LESS SECURE - Not used)**
-- **Cached copy**: Windows' copy of UEFI state (can become stale)
-- **Modifiable**: Can be changed by admin users or malware
-- **User-mode accessible**: Can be read/modified by user-mode tools
-- **Potential bypass**: Not the authoritative source
-
 ## Security Verification Method
 
 ### **Primary Method: UEFI Variable**
