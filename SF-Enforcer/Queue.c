@@ -62,7 +62,14 @@ NTSYSAPI NTSTATUS NTAPI ZwQuerySystemInformation(
 #pragma alloc_text (PAGE, SFEnforcerQueueInitialize)
 #endif
 
+// Forward declarations for helper functions
 VOID GetSecurityStatus(_Out_ PSYSTEM_SECURITY_STATUS Status);
+VOID CheckCodeIntegrity(_Out_ PSYSTEM_SECURITY_STATUS Status);
+VOID CheckSecureBoot(_Out_ PSYSTEM_SECURITY_STATUS Status);
+VOID CheckTpmReadiness(_Out_ PSYSTEM_SECURITY_STATUS Status);
+VOID CheckIommuFunctionality(_Out_ PSYSTEM_SECURITY_STATUS Status);
+VOID CheckVulnerableDriverBlocklist(_Out_ PSYSTEM_SECURITY_STATUS Status);
+VOID LogSecuritySummary(_In_ PSYSTEM_SECURITY_STATUS Status);
 
 NTSTATUS
 SFEnforcerQueueInitialize(
@@ -127,59 +134,70 @@ Return Value:
 VOID GetSecurityStatus(_Out_ PSYSTEM_SECURITY_STATUS Status)
 {
     RtlZeroMemory(Status, sizeof(SYSTEM_SECURITY_STATUS));
-    NTSTATUS ntStatus;
-    HANDLE hKey = NULL;
-    OBJECT_ATTRIBUTES objAttr;
+    
+    // Perform all security checks
+    CheckCodeIntegrity(Status);
+    CheckSecureBoot(Status);
+    CheckTpmReadiness(Status);
+    CheckIommuFunctionality(Status);
+    CheckVulnerableDriverBlocklist(Status);
+    
+    // Log comprehensive summary
+    LogSecuritySummary(Status);
+}
 
-    // 1. Check Code Integrity Information (HVCI, DSE, Test Signing)
-    // All these checks use the same ZwQuerySystemInformation call
+VOID CheckCodeIntegrity(_Out_ PSYSTEM_SECURITY_STATUS Status)
+{
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Code Integrity Check: Starting comprehensive analysis.");
     
     SYSTEM_CODE_INTEGRITY_INFORMATION sci_info = { 0 };
     sci_info.Length = sizeof(sci_info);
-    ntStatus = ZwQuerySystemInformation(SystemCodeIntegrityInformation, &sci_info, sizeof(sci_info), NULL);
+    NTSTATUS ntStatus = ZwQuerySystemInformation(SystemCodeIntegrityInformation, &sci_info, sizeof(sci_info), NULL);
     
-    if (NT_SUCCESS(ntStatus)) {
-        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Code Integrity Check: CodeIntegrityOptions = 0x%X", sci_info.CodeIntegrityOptions);
-        
-        // Check HVCI (Memory Integrity) - flag 0x400
-        if (sci_info.CodeIntegrityOptions & CODE_INTEGRITY_OPTIONS_HVCI_KMCI_ENABLED) {
-            Status->IsHvciEnabled = TRUE;
-            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "HVCI Check: CODE_INTEGRITY_OPTIONS_HVCI_KMCI_ENABLED (0x400) is set - HVCI is active");
-        } else {
-            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "HVCI Check: CODE_INTEGRITY_OPTIONS_HVCI_KMCI_ENABLED (0x400) is NOT set - HVCI is inactive");
-        }
-        
-        // Check DSE (Driver Signature Enforcement) - flag 0x01
-        if (sci_info.CodeIntegrityOptions & CODE_INTEGRITY_OPTIONS_ENABLED) {
-            Status->IsDseEnabled = TRUE;
-            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "DSE Check: CODE_INTEGRITY_OPTIONS_ENABLED (0x01) is set - DSE is active");
-        } else {
-            TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "DSE Check: CODE_INTEGRITY_OPTIONS_ENABLED (0x01) is NOT set - DSE is inactive");
-        }
-        
-        // Check Test Signing - flag 0x02
-        if (sci_info.CodeIntegrityOptions & CODE_INTEGRITY_OPTIONS_TESTSIGN) {
-            Status->IsTestSigningEnabled = TRUE;
-            TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "Test Signing Check: CODE_INTEGRITY_OPTIONS_TESTSIGN (0x02) is set - Test signing is enabled (security risk)");
-        } else {
-            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Test Signing Check: CODE_INTEGRITY_OPTIONS_TESTSIGN (0x02) is NOT set - Test signing is disabled (good for security)");
-        }
-        
-        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Code Integrity Summary: HVCI=%d, DSE=%d, TestSigning=%d", 
-            Status->IsHvciEnabled, Status->IsDseEnabled, Status->IsTestSigningEnabled);
-    } else {
+    if (!NT_SUCCESS(ntStatus)) {
         TraceEvents(TRACE_LEVEL_ERROR, TRACE_QUEUE, "Code Integrity Check: ZwQuerySystemInformation failed %!STATUS!", ntStatus);
+        return;
     }
 
-    // 2. Check for Secure Boot
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Code Integrity Check: CodeIntegrityOptions = 0x%X", sci_info.CodeIntegrityOptions);
+    
+    // Check HVCI (Memory Integrity) - flag 0x400
+    if (sci_info.CodeIntegrityOptions & CODE_INTEGRITY_OPTIONS_HVCI_KMCI_ENABLED) {
+        Status->IsHvciEnabled = TRUE;
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "HVCI Check: CODE_INTEGRITY_OPTIONS_HVCI_KMCI_ENABLED (0x400) is set - HVCI is active");
+    } else {
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "HVCI Check: CODE_INTEGRITY_OPTIONS_HVCI_KMCI_ENABLED (0x400) is NOT set - HVCI is inactive");
+    }
+    
+    // Check DSE (Driver Signature Enforcement) - flag 0x01
+    if (sci_info.CodeIntegrityOptions & CODE_INTEGRITY_OPTIONS_ENABLED) {
+        Status->IsDseEnabled = TRUE;
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "DSE Check: CODE_INTEGRITY_OPTIONS_ENABLED (0x01) is set - DSE is active");
+    } else {
+        TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "DSE Check: CODE_INTEGRITY_OPTIONS_ENABLED (0x01) is NOT set - DSE is inactive");
+    }
+    
+    // Check Test Signing - flag 0x02
+    if (sci_info.CodeIntegrityOptions & CODE_INTEGRITY_OPTIONS_TESTSIGN) {
+        Status->IsTestSigningEnabled = TRUE;
+        TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "Test Signing Check: CODE_INTEGRITY_OPTIONS_TESTSIGN (0x02) is set - Test signing is enabled (security risk)");
+    } else {
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Test Signing Check: CODE_INTEGRITY_OPTIONS_TESTSIGN (0x02) is NOT set - Test signing is disabled (good for security)");
+    }
+    
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Code Integrity Summary: HVCI=%d, DSE=%d, TestSigning=%d", 
+        Status->IsHvciEnabled, Status->IsDseEnabled, Status->IsTestSigningEnabled);
+}
+
+VOID CheckSecureBoot(_Out_ PSYSTEM_SECURITY_STATUS Status)
+{
     UNICODE_STRING varName = RTL_CONSTANT_STRING(L"SecureBoot");
     UCHAR secureBootValue = 0;
     // EFI_GLOBAL_VARIABLE is a GUID used for SecureBoot UEFI variable
     // {8BE4DF61-93CA-11D2-AA0D-00E098032B8C}
     static GUID EFI_GLOBAL_VARIABLE = { 0x8BE4DF61, 0x93CA, 0x11D2, { 0xAA, 0x0D, 0x00, 0xE0, 0x98, 0x03, 0x2B, 0x8C } };
     ULONG valueLength = sizeof(secureBootValue);
-    ntStatus = ExGetFirmwareEnvironmentVariable(&varName, &EFI_GLOBAL_VARIABLE, &secureBootValue, &valueLength, NULL);
+    NTSTATUS ntStatus = ExGetFirmwareEnvironmentVariable(&varName, &EFI_GLOBAL_VARIABLE, &secureBootValue, &valueLength, NULL);
 
     if (NT_SUCCESS(ntStatus)) {
         if (secureBootValue == 1) {
@@ -189,8 +207,10 @@ VOID GetSecurityStatus(_Out_ PSYSTEM_SECURITY_STATUS Status)
     } else {
         TraceEvents(TRACE_LEVEL_ERROR, TRACE_QUEUE, "Secure Boot Check: ExGetFirmwareEnvironmentVariable failed %!STATUS!", ntStatus);
     }
+}
 
-    // 3. Check for TPM readiness using DOS device path (PowerShell method)
+VOID CheckTpmReadiness(_Out_ PSYSTEM_SECURITY_STATUS Status)
+{
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: Starting DOS device path method (PowerShell Get-Tpm equivalent).");
     
     // Try DOS device path \\??\TPM - this is exactly what PowerShell Get-Tpm uses
@@ -200,131 +220,151 @@ VOID GetSecurityStatus(_Out_ PSYSTEM_SECURITY_STATUS Status)
     IO_STATUS_BLOCK ioStatusBlock;
     
     InitializeObjectAttributes(&tpmDosObjAttr, &tpmDosDeviceName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
-    ntStatus = ZwOpenFile(&hTpmDosDevice, GENERIC_READ, &tpmDosObjAttr, &ioStatusBlock, FILE_SHARE_READ, FILE_NON_DIRECTORY_FILE);
+    NTSTATUS ntStatus = ZwOpenFile(&hTpmDosDevice, GENERIC_READ, &tpmDosObjAttr, &ioStatusBlock, FILE_SHARE_READ, FILE_NON_DIRECTORY_FILE);
     
-    if (NT_SUCCESS(ntStatus)) {
-        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: SUCCESS - DOS device path \\??\\TPM accessible (PowerShell method)");
-        
-        // Try the exact IOCTL that PowerShell uses (0x22BC0C) for additional verification
-        // This is a TBS command submission IOCTL for TPM presence check
-        UCHAR tpmTestCommand[12] = { // TPM2_GetCapability for presence
-            0x80, 0x01,             // TPM_ST_NO_SESSIONS (tag = 0x8001)
-            0x00, 0x00, 0x00, 0x0C, // Command size = 12 bytes
-            0x00, 0x00, 0x01, 0x43, // TPM_CC_GetCapability = 0x143
-            0x00, 0x00,             // capability = TPM_CAP_FIRST (0x00)
-                };
-        UCHAR tpmResponse[1024] = { 0 };
-        IO_STATUS_BLOCK tpmIoStatus = { 0 };
-        
-        ntStatus = ZwDeviceIoControlFile(hTpmDosDevice, NULL, NULL, NULL, &tpmIoStatus, 
-                                       0x22BC0C, // Exact IOCTL from API monitoring PowerShell Get-Tpm
-                                       tpmTestCommand, sizeof(tpmTestCommand),
-                                       tpmResponse, sizeof(tpmResponse));
-        
-        if (NT_SUCCESS(ntStatus) || ntStatus == STATUS_PENDING) {
-            Status->IsTpmReady = TRUE;
-            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: TBS IOCTL 0x22BC0C successful - TPM is responding to commands");
-        } else {
-            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: TBS IOCTL 0x22BC0C failed %!STATUS! - but device path accessible", ntStatus);
-        }
-        
-        ZwClose(hTpmDosDevice);
-    } else {
+    if (!NT_SUCCESS(ntStatus)) {
         TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: DOS device path \\??\\TPM failed %!STATUS! - TPM not available", ntStatus);
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: Final TPM Ready status = NO");
+        return;
+    }
+
+    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: SUCCESS - DOS device path \\??\\TPM accessible (PowerShell method)");
+    
+    // Try the exact IOCTL that PowerShell uses (0x22BC0C) for additional verification
+    // This is a TBS command submission IOCTL for TPM presence check
+    UCHAR tpmTestCommand[12] = { // TPM2_GetCapability for presence
+        0x80, 0x01,             // TPM_ST_NO_SESSIONS (tag = 0x8001)
+        0x00, 0x00, 0x00, 0x0C, // Command size = 12 bytes
+        0x00, 0x00, 0x01, 0x43, // TPM_CC_GetCapability = 0x143
+        0x00, 0x00,             // capability = TPM_CAP_FIRST (0x00)
+    };
+    UCHAR tpmResponse[1024] = { 0 };
+    IO_STATUS_BLOCK tpmIoStatus = { 0 };
+    
+    ntStatus = ZwDeviceIoControlFile(hTpmDosDevice, NULL, NULL, NULL, &tpmIoStatus, 
+                                   0x22BC0C, // Exact IOCTL from API monitoring PowerShell Get-Tpm
+                                   tpmTestCommand, sizeof(tpmTestCommand),
+                                   tpmResponse, sizeof(tpmResponse));
+    
+    if (NT_SUCCESS(ntStatus) || ntStatus == STATUS_PENDING) {
+        Status->IsTpmReady = TRUE;
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: TBS IOCTL 0x22BC0C successful - TPM is responding to commands");
+    } else {
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: TBS IOCTL 0x22BC0C failed %!STATUS! - but device path accessible", ntStatus);
     }
     
+    ZwClose(hTpmDosDevice);
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "TPM Check: Final TPM Ready status = %s", Status->IsTpmReady ? "YES" : "NO");
+}
 
-    // 4. Check for IOMMU availability and functionality using IoGetIommuInterfaceEx
+BOOLEAN TryCreateIommuDomain(_In_ PDMA_IOMMU_INTERFACE_EX IommuInterface)
+{
+    PIOMMU_DMA_DOMAIN testDomain = NULL;
+    BOOLEAN success = FALSE;
+
+    __try {
+        NTSTATUS ntStatus = IommuInterface->V1.CreateDomain(FALSE, &testDomain);
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "IOMMU Check: CreateDomain test returned status: %!STATUS! (0x%08X)", ntStatus, ntStatus);
+        
+        if (NT_SUCCESS(ntStatus) && testDomain != NULL) {
+            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "IOMMU Check: SUCCESS - Domain created successfully! IOMMU is FUNCTIONAL!");
+            success = TRUE;
+            
+            // Clean up the test domain immediately
+            __try {
+                NTSTATUS deleteStatus = IommuInterface->V1.DeleteDomain(testDomain);
+                TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "IOMMU Check: Test domain cleanup - DeleteDomain returned %!STATUS!", deleteStatus);
+            }
+            __except(EXCEPTION_EXECUTE_HANDLER) {
+                TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "IOMMU Check: Exception during domain cleanup (0x%08X)", GetExceptionCode());
+            }
+        } else {
+            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "IOMMU Check: Domain creation failed with status 0x%08X", ntStatus);
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "IOMMU Check: Exception during domain creation test (0x%08X)", GetExceptionCode());
+    }
+
+    return success;
+}
+
+VOID CheckIommuFunctionality(_Out_ PSYSTEM_SECURITY_STATUS Status)
+{
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "IOMMU Check: Starting IOMMU functionality test using V1 interface.");
     
     DMA_IOMMU_INTERFACE_EX iommuInterface;
     RtlZeroMemory(&iommuInterface, sizeof(iommuInterface));
 
-    ntStatus = IoGetIommuInterfaceEx(1, 0ULL, &iommuInterface);
+    NTSTATUS ntStatus = IoGetIommuInterfaceEx(1, 0ULL, &iommuInterface);
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "IOMMU Check: IoGetIommuInterfaceEx returned status: %!STATUS! (0x%08X)", ntStatus, ntStatus);
 
-    if (NT_SUCCESS(ntStatus)) {
-        if (iommuInterface.Version >= 1) {            
-            if (iommuInterface.V1.CreateDomain != NULL && iommuInterface.V1.DeleteDomain != NULL) 
-            {                
-                PIOMMU_DMA_DOMAIN testDomain = NULL;
-                __try {
-                    ntStatus = iommuInterface.V1.CreateDomain(FALSE, &testDomain);
-                    
-                    TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "IOMMU Check: CreateDomain test returned status: %!STATUS! (0x%08X)", ntStatus, ntStatus);
-                    
-                    if (NT_SUCCESS(ntStatus) && testDomain != NULL) {
-                        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "IOMMU Check: SUCCESS - Domain created successfully! IOMMU is FUNCTIONAL!");
-                        Status->IsIommuEnabled = TRUE;
-                        
-                        // Clean up the test domain immediately
-                        __try {
-                            NTSTATUS deleteStatus = iommuInterface.V1.DeleteDomain(testDomain);
-                            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "IOMMU Check: Test domain cleanup - DeleteDomain returned %!STATUS!", deleteStatus);
-                        }
-                        __except(EXCEPTION_EXECUTE_HANDLER) {
-                            TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "IOMMU Check: Exception during domain cleanup (0x%08X)", GetExceptionCode());
-                        }
-                    } else {
-                            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "IOMMU Check: Domain creation failed with status 0x%08X", ntStatus);
-                    }
-                }
-                __except(EXCEPTION_EXECUTE_HANDLER) {
-                    TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "IOMMU Check: Exception during domain creation test (0x%08X)", GetExceptionCode());
-                    
-                }
-            } else {
-                TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "IOMMU Check: CreateDomain or DeleteDomain function pointers are NULL");
-            }
-        } else {
-            TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "IOMMU Check: Interface version (%u) is less than 1 - V1 functions not available", iommuInterface.Version);
-        }
-        
-    } else {
+    if (!NT_SUCCESS(ntStatus)) {
         TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "IOMMU Check: Failed to obtain IOMMU interface - %!STATUS!", ntStatus);
+        goto Cleanup;
     }
-    
+
+    if (iommuInterface.Version < 1) {
+        TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "IOMMU Check: Interface version (%u) is less than 1 - V1 functions not available", iommuInterface.Version);
+        goto Cleanup;
+    }
+
+    if (iommuInterface.V1.CreateDomain == NULL || iommuInterface.V1.DeleteDomain == NULL) {
+        TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "IOMMU Check: CreateDomain or DeleteDomain function pointers are NULL");
+        goto Cleanup;
+    }
+
+    // Test IOMMU functionality by creating a domain
+    Status->IsIommuEnabled = TryCreateIommuDomain(&iommuInterface);
+
+Cleanup:
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "IOMMU Check: Final IOMMU functionality status = %s", 
         Status->IsIommuEnabled ? "FUNCTIONAL" : "NOT FUNCTIONAL");
+}
 
-
-    // 5. Check for Vulnerable Driver Blocklist via registry
+VOID CheckVulnerableDriverBlocklist(_Out_ PSYSTEM_SECURITY_STATUS Status)
+{
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: Starting registry query.");
 
+    HANDLE hKey = NULL;
+    OBJECT_ATTRIBUTES objAttr;
     UNICODE_STRING vdbKeyName = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\CI\\Config");
+    
     InitializeObjectAttributes(&objAttr, &vdbKeyName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
-    ntStatus = ZwOpenKey(&hKey, KEY_READ, &objAttr);
+    NTSTATUS ntStatus = ZwOpenKey(&hKey, KEY_READ, &objAttr);
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: ZwOpenKey on CI\\Config returned %!STATUS!", ntStatus);
 
-    if (NT_SUCCESS(ntStatus)) {
-        UNICODE_STRING vdbValueName = RTL_CONSTANT_STRING(L"VulnerableDriverBlocklistEnable");
-        UCHAR vdbBuffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(ULONG)];
-        PKEY_VALUE_PARTIAL_INFORMATION pVdbInfo = (PKEY_VALUE_PARTIAL_INFORMATION)vdbBuffer;
-        ULONG vdbResultLength = 0;
+    if (!NT_SUCCESS(ntStatus)) {
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: CI\\Config key not accessible");
+        return;
+    }
 
-        ntStatus = ZwQueryValueKey(hKey, &vdbValueName, KeyValuePartialInformation, pVdbInfo, sizeof(vdbBuffer), &vdbResultLength);
-        if (NT_SUCCESS(ntStatus) && pVdbInfo->Type == REG_DWORD) {
-            ULONG vdbValue = *((PULONG)pVdbInfo->Data);
-            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: VulnerableDriverBlocklistEnable = %u", vdbValue);
-            if (vdbValue == 1) {
-                Status->IsVulnerableDriverBlocklistEnabled = TRUE;
-                TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: Registry value shows blocklist is ENABLED");
-            }
-            else {
-                TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: Registry value shows blocklist is DISABLED");
-            }
+    UNICODE_STRING vdbValueName = RTL_CONSTANT_STRING(L"VulnerableDriverBlocklistEnable");
+    UCHAR vdbBuffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(ULONG)];
+    PKEY_VALUE_PARTIAL_INFORMATION pVdbInfo = (PKEY_VALUE_PARTIAL_INFORMATION)vdbBuffer;
+    ULONG vdbResultLength = 0;
+
+    ntStatus = ZwQueryValueKey(hKey, &vdbValueName, KeyValuePartialInformation, pVdbInfo, sizeof(vdbBuffer), &vdbResultLength);
+    if (NT_SUCCESS(ntStatus) && pVdbInfo->Type == REG_DWORD) {
+        ULONG vdbValue = *((PULONG)pVdbInfo->Data);
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: VulnerableDriverBlocklistEnable = %u", vdbValue);
+        if (vdbValue == 1) {
+            Status->IsVulnerableDriverBlocklistEnabled = TRUE;
+            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: Registry value shows blocklist is ENABLED");
         }
         else {
-            TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: VulnerableDriverBlocklistEnable registry value not found");
+            TraceEvents(TRACE_LEVEL_WARNING, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: Registry value shows blocklist is DISABLED");
         }
-        ZwClose(hKey);
-        hKey = NULL;
     }
     else {
-        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: CI\\Config key not accessible");
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Vulnerable Driver Blocklist Check: VulnerableDriverBlocklistEnable registry value not found");
     }
     
+    ZwClose(hKey);
+}
+
+VOID LogSecuritySummary(_In_ PSYSTEM_SECURITY_STATUS Status)
+{
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "Security Analysis Summary:");
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  HVCI (Memory Integrity):     %s", Status->IsHvciEnabled ? "ENABLED" : "DISABLED");
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_QUEUE, "  DSE (Driver Sig. Enf.):      %s", Status->IsDseEnabled ? "ENABLED" : "DISABLED");

@@ -46,5 +46,5 @@ typedef struct _SYSTEM_SECURITY_STATUS {
     BOOLEAN IsDseEnabled;
     BOOLEAN IsTestSigningEnabled;
     BOOLEAN IsVulnerableDriverBlocklistEnabled;
-    BOOLEAN IsIommuEnabled;  // Added IOMMU support
+    BOOLEAN IsIommuEnabled;
 } SYSTEM_SECURITY_STATUS, * PSYSTEM_SECURITY_STATUS;

@@ -19,7 +19,6 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <None Include="ReadMe.txt" />
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
@@ -46,9 +45,6 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Queue.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="SecureBootTest.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
