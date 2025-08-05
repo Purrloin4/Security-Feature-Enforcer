@@ -14,6 +14,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SF-Enforcer-MM", "..\SF-Enforcer-MM\SF-Enforcer-MM.vcxproj", "{E6B2D21E-9F05-8FDF-5014-55408E47B50C}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SF-Manager-Plugin", "..\SF-Manager-Plugin\SF-Manager-Plugin.vcxproj", "{43E039C2-CCBA-454F-963F-C80CA3C47F29}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|ARM64 = Debug|ARM64
@@ -54,6 +56,14 @@ Global
 		{E6B2D21E-9F05-8FDF-5014-55408E47B50C}.Release|x64.ActiveCfg = Release|x64
 		{E6B2D21E-9F05-8FDF-5014-55408E47B50C}.Release|x64.Build.0 = Release|x64
 		{E6B2D21E-9F05-8FDF-5014-55408E47B50C}.Release|x64.Deploy.0 = Release|x64
+		{43E039C2-CCBA-454F-963F-C80CA3C47F29}.Debug|ARM64.ActiveCfg = Debug|x64
+		{43E039C2-CCBA-454F-963F-C80CA3C47F29}.Debug|ARM64.Build.0 = Debug|x64
+		{43E039C2-CCBA-454F-963F-C80CA3C47F29}.Debug|x64.ActiveCfg = Debug|x64
+		{43E039C2-CCBA-454F-963F-C80CA3C47F29}.Debug|x64.Build.0 = Debug|x64
+		{43E039C2-CCBA-454F-963F-C80CA3C47F29}.Release|ARM64.ActiveCfg = Release|x64
+		{43E039C2-CCBA-454F-963F-C80CA3C47F29}.Release|ARM64.Build.0 = Release|x64
+		{43E039C2-CCBA-454F-963F-C80CA3C47F29}.Release|x64.ActiveCfg = Release|x64
+		{43E039C2-CCBA-454F-963F-C80CA3C47F29}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

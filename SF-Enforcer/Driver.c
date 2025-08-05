@@ -66,10 +66,12 @@ DriverEntry(
     }
 
     //
-    // Create a control device object
+    // Create a control device object with security that allows normal users to access it
     //
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DRIVER, "Calling WdfControlDeviceInitAllocate");
-    deviceInit = WdfControlDeviceInitAllocate(WdfGetDriver(), &SDDL_DEVOBJ_SYS_ALL_ADM_ALL);
+    // SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_R: System=Full, Admin=Read/Write/Execute, Everyone=Read
+    // This allows normal users and games to read security status
+    deviceInit = WdfControlDeviceInitAllocate(WdfGetDriver(), &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_R);
     if (!deviceInit) {
         status = STATUS_INSUFFICIENT_RESOURCES;
         TraceEvents(TRACE_LEVEL_ERROR, TRACE_DRIVER, "WdfControlDeviceInitAllocate failed %!STATUS!", status);

@@ -33,12 +33,10 @@ DEFINE_GUID (GUID_DEVINTERFACE_SFEnforcer,
 #endif
 #include <devioctl.h>
 
-// Define a custom IOCTL code for our driver.
-// This is how the user-mode app will ask the driver to perform the security check.
+// Define the single IOCTL code we need
 #define IOCTL_GET_SECURITY_STATUS CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
-// This structure will hold the results of our security checks.
-// The driver fills it, and the user-mode app reads it.
+// System security status structure
 typedef struct _SYSTEM_SECURITY_STATUS {
     BOOLEAN IsHvciEnabled;
     BOOLEAN IsSecureBootEnabled;
@@ -47,4 +45,4 @@ typedef struct _SYSTEM_SECURITY_STATUS {
     BOOLEAN IsTestSigningEnabled;
     BOOLEAN IsVulnerableDriverBlocklistEnabled;
     BOOLEAN IsIommuEnabled;
-} SYSTEM_SECURITY_STATUS, * PSYSTEM_SECURITY_STATUS;
+} SYSTEM_SECURITY_STATUS, *PSYSTEM_SECURITY_STATUS;

@@ -6,6 +6,19 @@
 
 #pragma comment (lib, "Tbs.lib") // Link against the TBS library
 
+void PrintSecurityStatus(const SYSTEM_SECURITY_STATUS* status)
+{
+    printf("\n--- System Security Status ---\n");
+    printf("Code Integrity Check: Memory Integrity (HVCI):              %s\n", status->IsHvciEnabled ? "[+] ENABLED" : "[-] DISABLED");
+    printf("Code Integrity Check: DSE (Driver Sig. Enf.):               %s\n", status->IsDseEnabled ? "[+] ENABLED" : "[-] DISABLED");
+    printf("Code Integrity Check: Test Signing:                         %s\n", status->IsTestSigningEnabled ? "[-] ENABLED (risky)" : "[+] DISABLED (secure)");
+    printf("Environment Check: Secure Boot:                             %s\n", status->IsSecureBootEnabled ? "[+] ENABLED" : "[-] DISABLED");
+    printf("Driver check and direct coms with TPM driver: TPM Ready:    %s\n", status->IsTpmReady ? "[+] YES" : "[-] NO");
+    printf("Kernel API Check: IOMMU Available:                          %s\n", status->IsIommuEnabled ? "[+] YES" : "[-] NO");
+    printf("Registry Check: Vulnerable Driver Blocklist:                %s\n", status->IsVulnerableDriverBlocklistEnabled ? "[+] ENABLED" : "[-] DISABLED");
+    printf("------------------------------\n");
+}
+
 int main()
 {
     HANDLE hDevice = INVALID_HANDLE_VALUE;
@@ -37,7 +50,7 @@ int main()
     // Step 2: Open a handle to our driver.
     hDevice = CreateFileW(
         L"\\\\.\\SFEnforcer", // Note: \\.\ maps to \DosDevices
-        GENERIC_READ | GENERIC_WRITE,
+        GENERIC_READ,         // Only request read access since we only read security status
         0, NULL, OPEN_EXISTING, 0, NULL);
     if (hDevice == INVALID_HANDLE_VALUE) {
         printf("Error: CreateFile failed for SFEnforcer device: %d\n", GetLastError());
@@ -56,15 +69,7 @@ int main()
         printf("Error: DeviceIoControl failed: %d\n", GetLastError());
     }
     else if (bytesReturned == sizeof(SYSTEM_SECURITY_STATUS)) {
-        printf("\n--- System Security Status ---\n");
-        printf("Code Integrity Check: Memory Integrity (HVCI):              %s\n", securityStatus.IsHvciEnabled ? "[+] ENABLED" : "[-] DISABLED");
-        printf("Code Integrity Check: DSE (Driver Sig. Enf.):               %s\n", securityStatus.IsDseEnabled ? "[+] ENABLED" : "[-] DISABLED");
-        printf("Code Integrity Check: Test Signing:                         %s\n", securityStatus.IsTestSigningEnabled ? "[-] ENABLED (risky)" : "[+] DISABLED (secure)");
-        printf("Environment Check: Secure Boot:                             %s\n", securityStatus.IsSecureBootEnabled ? "[+] ENABLED" : "[-] DISABLED");
-        printf("Driver check and direct coms with TPM driver: TPM Ready:    %s\n", securityStatus.IsTpmReady ? "[+] YES" : "[-] NO");
-        printf("Kernel API Check: IOMMU Available:                          %s\n", securityStatus.IsIommuEnabled ? "[+] YES" : "[-] NO");
-        printf("Registry Check: Vulnerable Driver Blocklist:                %s\n", securityStatus.IsVulnerableDriverBlocklistEnabled ? "[+] ENABLED" : "[-] DISABLED");
-        printf("------------------------------\n");
+        PrintSecurityStatus(&securityStatus);
         printf("Security Analysis Summary: HVCI=%s, Secure Boot=%s, TPM Ready=%s, DSE=%s, Test Signing=%s, IOMMU=%s, VDB=%s\n",
             securityStatus.IsHvciEnabled ? "ENABLED" : "DISABLED",
             securityStatus.IsSecureBootEnabled ? "ENABLED" : "DISABLED", 
@@ -81,5 +86,6 @@ int main()
     // Clean up
     CloseHandle(hDevice);
 
+    printf("\nSimple security status check complete!\n");
     return 0;
 }

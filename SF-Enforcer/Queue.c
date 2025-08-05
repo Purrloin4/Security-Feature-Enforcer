@@ -23,14 +23,10 @@ Environment:
 // Manually define structures and functions to avoid header conflicts with ntifs.h
 typedef ULONG SYSTEM_INFORMATION_CLASS;
 
-
 // Define the SYSTEM_INFORMATION_CLASS for code integrity information
-
 #ifndef SystemCodeIntegrityInformation
 #define SystemCodeIntegrityInformation 0x67
 #endif
-
-
 
 // Structure for SYSTEM_CODE_INTEGRITY_INFORMATION, parameter for ZwQuerySystemInformation
 typedef struct _SYSTEM_CODE_INTEGRITY_INFORMATION {
@@ -443,6 +439,7 @@ Return Value:
         }
         break;
     }
+    
     default:
         status = STATUS_INVALID_DEVICE_REQUEST;
         break;

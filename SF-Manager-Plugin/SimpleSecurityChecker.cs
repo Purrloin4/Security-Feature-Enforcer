@@ -1,0 +1,182 @@
+//================================================================================================================
+// SimpleSecurityChecker.cs - Unity C# script for checking security status
+// 
+// Usage:
+// 1. Copy SF-Manager-Plugin.dll to Assets/Plugins/ in your Unity project
+// 2. Add this script to a GameObject in your scene
+// 3. Check security status and implement your own logic based on the results
+//
+// Example:
+//   var status = securityChecker.GetCurrentSecurityStatus();
+//   if (!status.isTpmReady) {
+//       ShowTPMWarning();
+//   }
+//================================================================================================================
+
+using System;
+using System.Runtime.InteropServices;
+using UnityEngine;
+
+namespace SFEnforcer
+{
+    [System.Serializable]
+    public struct SecurityStatus
+    {
+        public bool isHvciEnabled;
+        public bool isSecureBootEnabled;
+        public bool isTpmReady;
+        public bool isDseEnabled;
+        public bool isTestSigningEnabled;
+        public bool isVulnerableDriverBlocklistEnabled;
+        public bool isIommuEnabled;
+    }
+
+    public class SimpleSecurityChecker : MonoBehaviour
+    {
+        // P/Invoke declarations for SF-Manager-Plugin.dll
+        [DllImport("SF-Manager-Plugin")]
+        private static extern bool InitializeSecurityDriver();
+        
+        [DllImport("SF-Manager-Plugin")]
+        private static extern void CleanupSecurityDriver();
+        
+        [DllImport("SF-Manager-Plugin")]
+        private static extern IntPtr GetLastErrorMessage();
+        
+        [DllImport("SF-Manager-Plugin")]
+        private static extern bool GetSecurityStatus(out SecurityStatus status);
+
+        [Header("Current Security Status")]
+        [SerializeField, ReadOnly] private SecurityStatus currentSecurityStatus;
+        [SerializeField, ReadOnly] private bool isDriverInitialized = false;
+        [SerializeField, ReadOnly] private string lastError = "";
+
+        // Events that other systems can subscribe to
+        public event System.Action<SecurityStatus> OnSecurityStatusUpdated;
+        public event System.Action<string> OnDriverError;
+
+        private void Start()
+        {
+            InitializeDriver();
+            
+            // Check security status every 10 seconds
+            InvokeRepeating(nameof(UpdateSecurityStatus), 1f, 10f);
+        }
+
+        private void OnDestroy()
+        {
+            CleanupSecurityDriver();
+        }
+
+        private void InitializeDriver()
+        {
+            if (InitializeSecurityDriver())
+            {
+                isDriverInitialized = true;
+                lastError = "Driver initialized successfully";
+                Debug.Log("[SF-Enforcer] Security driver initialized successfully");
+            }
+            else
+            {
+                string error = GetLastErrorString();
+                lastError = error;
+                isDriverInitialized = false;
+                Debug.LogError($"[SF-Enforcer] Failed to initialize security driver: {error}");
+                OnDriverError?.Invoke(error);
+            }
+        }
+
+        [ContextMenu("Update Security Status")]
+        public void UpdateSecurityStatus()
+        {
+            if (!isDriverInitialized) return;
+
+            if (GetSecurityStatus(out SecurityStatus status))
+            {
+                currentSecurityStatus = status;
+                lastError = "Security status updated successfully";
+                OnSecurityStatusUpdated?.Invoke(status);
+            }
+            else
+            {
+                string error = GetLastErrorString();
+                lastError = error;
+                Debug.LogError($"[SF-Enforcer] Failed to get security status: {error}");
+                OnDriverError?.Invoke(error);
+            }
+        }
+
+        private string GetLastErrorString()
+        {
+            IntPtr errorPtr = GetLastErrorMessage();
+            return Marshal.PtrToStringAnsi(errorPtr) ?? "Unknown error";
+        }
+
+        // Public API for other game systems
+        public bool IsDriverInitialized() => isDriverInitialized;
+        public string GetLastError() => lastError;
+        public SecurityStatus GetCurrentSecurityStatus() => currentSecurityStatus;
+
+        [ContextMenu("Log Security Status")]
+        private void LogSecurityStatus()
+        {
+            if (isDriverInitialized)
+            {
+                UpdateSecurityStatus();
+                
+                Debug.Log($"[SF-Enforcer] Current Security Status:\n" +
+                         $"• HVCI (Memory Integrity): {currentSecurityStatus.isHvciEnabled}\n" +  
+                         $"• Secure Boot: {currentSecurityStatus.isSecureBootEnabled}\n" +
+                         $"• TPM Ready: {currentSecurityStatus.isTpmReady}\n" +
+                         $"• DSE (Driver Signature Enforcement): {currentSecurityStatus.isDseEnabled}\n" +
+                         $"• Test Signing: {currentSecurityStatus.isTestSigningEnabled}\n" +
+                         $"• Vulnerable Driver Blocklist: {currentSecurityStatus.isVulnerableDriverBlocklistEnabled}\n" +
+                         $"• IOMMU: {currentSecurityStatus.isIommuEnabled}");
+            }
+            else
+            {
+                Debug.LogError("[SF-Enforcer] Driver not initialized");
+            }
+        }
+
+        // Example of how developers can implement their own security logic
+        [ContextMenu("Example Security Check")]
+        private void ExampleSecurityCheck()
+        {
+            if (!isDriverInitialized) return;
+            
+            UpdateSecurityStatus();
+            
+            // Example: Check for competitive gaming requirements
+            if (currentSecurityStatus.isSecureBootEnabled && 
+                currentSecurityStatus.isTpmReady && 
+                !currentSecurityStatus.isTestSigningEnabled)
+            {
+                Debug.Log("[SF-Enforcer] ? Ready for competitive gaming!");
+            }
+            else
+            {
+                Debug.LogWarning("[SF-Enforcer] ? Some competitive gaming requirements not met:");
+                if (!currentSecurityStatus.isSecureBootEnabled) Debug.LogWarning("  - Secure Boot not enabled");
+                if (!currentSecurityStatus.isTpmReady) Debug.LogWarning("  - TPM not ready");
+                if (currentSecurityStatus.isTestSigningEnabled) Debug.LogWarning("  - Test Signing is enabled (should be disabled)");
+            }
+        }
+    }
+
+    // Helper attribute for read-only fields in inspector
+    public class ReadOnlyAttribute : PropertyAttribute { }
+
+    #if UNITY_EDITOR
+    [UnityEditor.CustomPropertyDrawer(typeof(ReadOnlyAttribute))]
+    public class ReadOnlyDrawer : UnityEditor.PropertyDrawer
+    {
+        public override void OnGUI(Rect position, UnityEditor.SerializedProperty property, GUIContent label)
+        {
+            GUI.enabled = false;
+            UnityEditor.EditorGUI.PropertyField(position, property, label, true);
+            GUI.enabled = true;
+        }
+    }
+    #endif
+}
