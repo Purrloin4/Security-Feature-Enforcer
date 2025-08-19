@@ -36,3 +36,4 @@ packages/
 *.pubxml
 *.pubxml.user
 *.zip
+/notes.txt

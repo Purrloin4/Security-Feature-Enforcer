@@ -1,10 +1,8 @@
-// SF-Manager-Plugin.cpp : Simple Unity plugin for security status checking
 #include "pch.h"
 #include <string>
 #include <memory>
 #include "..\\SF-Enforcer\\Public.h"
 
-// Global variables
 static HANDLE g_hDevice = INVALID_HANDLE_VALUE;
 static std::string g_lastError;
 
@@ -12,20 +10,18 @@ static std::string g_lastError;
 #define UNITY_INTERFACE_EXPORT __declspec(dllexport)
 
 extern "C" {
-    // Simple driver communication functions
     UNITY_INTERFACE_EXPORT bool InitializeSecurityDriver();
     UNITY_INTERFACE_EXPORT void CleanupSecurityDriver();
     UNITY_INTERFACE_EXPORT const char* GetLastErrorMessage();
     UNITY_INTERFACE_EXPORT bool GetSecurityStatus(SYSTEM_SECURITY_STATUS* status);
 }
 
-// Helper function to find and open the security device
 HANDLE OpenSecurityDevice()
 {
     // Use read-only access since normal users only have read permissions
     HANDLE hDevice = CreateFileW(
-        L"\\\\.\\SFEnforcer", // Same device name as SF-UserApp
-        GENERIC_READ,         // Only request read access - matches user permissions
+        L"\\\\.\\SFEnforcer",
+        GENERIC_READ,
         0, 
         NULL, 
         OPEN_EXISTING, 
@@ -44,7 +40,6 @@ HANDLE OpenSecurityDevice()
     return hDevice;
 }
 
-// Plugin interface implementations
 bool InitializeSecurityDriver()
 {
     if (g_hDevice != INVALID_HANDLE_VALUE) {
