@@ -1,5 +1,6 @@
-Admin terminal VM:
+#How to test driver in Hyper-V VM:
 
+Admin terminal VM:
 -- Network debugging (https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/setting-up-network-debugging-of-a-virtual-machine-host) --
 bcdedit /set TESTSIGNING on
 bcdedit /debug on
@@ -19,7 +20,20 @@ Test DSE in VM:
 3. Reboot into Advanced startup (shift restart)
 4. Disable driver signature enforcement
 
-# Research Methodology for Thesis
+
+# Finding of Security Features chekck functions in Windows
+
+## Code Integrity Research
+- Googling found NtQuerySystemInformation and its kernel function equivalent ZwQuerySystemInformation
+
+## Secure Boot Research
+- Googling found Secure Boot within the UEFI firmware spec which has kernel functions to query Secure Boot state
+
+## IOMMU Research
+- Looking at the Windows kernel functions found functions with "Iommu" in the name
+
+## VDB Research
+- Googling found that VBS is a Windows variable that is only available from the Windows registry, so has to be checked there
 
 ## TPM Detection Research
 - Used API Monitor to capture function calls made by PowerShell Get-Tpm command
