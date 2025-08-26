@@ -139,31 +139,6 @@ namespace SFEnforcer
             }
         }
 
-        // Example of how developers can implement their own security logic
-        [ContextMenu("Example Security Check")]
-        private void ExampleSecurityCheck()
-        {
-            if (!isDriverInitialized) return;
-            
-            UpdateSecurityStatus();
-            
-            // Example: Check for competitive gaming requirements
-            if (currentSecurityStatus.isSecureBootEnabled && 
-                currentSecurityStatus.isTpmReady && 
-                !currentSecurityStatus.isTestSigningEnabled)
-            {
-                Debug.Log("[SF-Enforcer] ? Ready for competitive gaming!");
-            }
-            else
-            {
-                Debug.LogWarning("[SF-Enforcer] ? Some competitive gaming requirements not met:");
-                if (!currentSecurityStatus.isSecureBootEnabled) Debug.LogWarning("  - Secure Boot not enabled");
-                if (!currentSecurityStatus.isTpmReady) Debug.LogWarning("  - TPM not ready");
-                if (currentSecurityStatus.isTestSigningEnabled) Debug.LogWarning("  - Test Signing is enabled (should be disabled)");
-            }
-        }
-    }
-
     // Helper attribute for read-only fields in inspector
     public class ReadOnlyAttribute : PropertyAttribute { }
 
