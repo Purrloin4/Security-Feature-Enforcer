@@ -19,7 +19,6 @@ Environment:
 #define _DRIVER_H_
 
 #include <ntddk.h>
-#include "public.h"
 
 // Tutorial pattern: Function prototypes without attributes
 NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath);
